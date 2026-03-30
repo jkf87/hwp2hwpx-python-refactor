@@ -1,7 +1,19 @@
 """HWP file reader using pyhwp (hwp5) and olefile."""
 
 import olefile
+import zlib
 from hwp5.xmlmodel import Hwp5File
+
+# Known image file signatures
+_IMAGE_SIGNATURES = {
+    b'\xff\xd8\xff': 'jpg',     # JFIF
+    b'\x89PNG': 'png',          # PNG
+    b'BM': 'bmp',               # BMP
+    b'\xd7\xcd\xc6\x9a': 'wmf',  # Placeable WMF
+    b'\x01\x00': 'wmf',         # Standard WMF
+    b'\x01\x00\x00\x00': 'emf',  # EMF (might also match WMF)
+    b'GIF': 'gif',              # GIF
+}
 
 
 class HWPReader:
@@ -93,15 +105,24 @@ class HWPReader:
     # --- BinData (embedded files) ---
 
     def get_bindata_bytes(self, storage_id, ext):
-        """Read embedded binary data from BinData stream."""
+        """Read embedded binary data from BinData stream, decompressing if needed."""
         stream_name = f"BinData/BIN{storage_id:04d}.{ext}"
-        if self.ole.exists(stream_name):
-            return self.ole.openstream(stream_name).read()
-        # Try uppercase
-        stream_name_upper = f"BinData/BIN{storage_id:04d}.{ext.upper()}"
-        if self.ole.exists(stream_name_upper):
-            return self.ole.openstream(stream_name_upper).read()
-        return None
+        if not self.ole.exists(stream_name):
+            stream_name = f"BinData/BIN{storage_id:04d}.{ext.upper()}"
+        if not self.ole.exists(stream_name):
+            return None
+        data = self.ole.openstream(stream_name).read()
+        if not data:
+            return data
+        # Check if data starts with a known image signature
+        is_valid_image = any(data.startswith(sig) for sig in _IMAGE_SIGNATURES)
+        if not is_valid_image:
+            # Try zlib decompression (HWP5 uses raw deflate)
+            try:
+                data = zlib.decompress(data, -15)
+            except zlib.error:
+                pass  # Not compressed or unknown format
+        return data
 
     # --- Summary Information ---
 
