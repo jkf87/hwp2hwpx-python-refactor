@@ -4,6 +4,82 @@ from .xml_builder import root_element, sub, make_tag
 from . import value_maps as vm
 
 
+def _arrow_style(val):
+    """Convert arrow head/tail style integer to HWPX string."""
+    _ARROW_MAP = {
+        0: "NORMAL",
+        1: "ARROW",
+        2: "SPEAR",
+        3: "CONCAVE_ARROW",
+        4: "EMPTY_DIAMOND",
+        5: "EMPTY_CIRCLE",
+        6: "EMPTY_BOX",
+        7: "FILLED_DIAMOND",
+        8: "FILLED_CIRCLE",
+        9: "FILLED_BOX",
+    }
+    return _ARROW_MAP.get(val, "NORMAL")
+
+
+def _compute_final_dimensions(sc_content):
+    """Compute final shape dimensions by applying all scalerotation transforms.
+
+    HWP shapes have initial_width/height and a chain of scalerotation transforms.
+    The SHAPE_COMPONENT width/height only captures the first level.
+    We need to apply ALL transforms to get the true rendered dimensions.
+    """
+    if not sc_content:
+        return None, None
+    scalerotations = sc_content.get("scalerotations", [])
+    if not scalerotations:
+        return sc_content.get("width"), sc_content.get("height")
+
+    w = sc_content.get("initial_width", 0)
+    h = sc_content.get("initial_height", 0)
+    if w == 0 and h == 0:
+        return sc_content.get("width"), sc_content.get("height")
+
+    for sr in scalerotations:
+        s = sr.get("scaler", {})
+        a = s.get("a", 1.0)
+        b = s.get("b", 0.0)
+        c = s.get("c", 0.0)
+        d = s.get("d", 1.0)
+        new_w = abs(a * w + c * h)
+        new_h = abs(b * w + d * h)
+        w, h = new_w, new_h
+
+    return int(round(w)), int(round(h))
+
+
+def _transform_point(x, y, sc_content):
+    """Transform a point through the scalerotation chain (scaling only, no translation).
+
+    For HWPX, line endpoints are in the shape's local coordinate space.
+    We apply only the scaling/rotation part of each transform, not the translation,
+    since translation positions the shape within its parent.
+    """
+    if not sc_content:
+        return x, y
+    scalerotations = sc_content.get("scalerotations", [])
+    if not scalerotations:
+        return x, y
+
+    fx, fy = float(x), float(y)
+    for sr in scalerotations:
+        s = sr.get("scaler", {})
+        a = s.get("a", 1.0)
+        b = s.get("b", 0.0)
+        c = s.get("c", 0.0)
+        d = s.get("d", 1.0)
+        # Exclude translation (e, f) - positioning is handled by pos element
+        new_x = a * fx + c * fy
+        new_y = b * fx + d * fy
+        fx, fy = new_x, new_y
+
+    return int(round(fx)), int(round(fy))
+
+
 def build_section_xml(reader, section_idx):
     """Build section XML element from HWP section models."""
     models = reader.get_section_models(section_idx)
@@ -545,11 +621,13 @@ class ConversionContext:
                     self._build_container(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
                 elif chid == "$lin":
                     self._build_line_shape(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
+                elif chid == "$ell":
+                    self._build_ellipse(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
                 # else: unknown shape type, skip
                 break
 
-    def _gso_common_attrs(self, elem, ctrl_content, numbering_type="PICTURE"):
-        """Set common GSO attributes (sz, pos, outMargin) on an element."""
+    def _gso_common_attrs(self, elem, ctrl_content, numbering_type="PICTURE", sc_content=None):
+        """Set common GSO attributes (sz, pos, outMargin, lineShape, fillBrush) on an element."""
         elem.set("id", str(ctrl_content.get("instance_id", 0)))
         elem.set("zOrder", str(ctrl_content.get("z_order", 0)))
         elem.set("numberingType", numbering_type)
@@ -597,10 +675,40 @@ class ConversionContext:
         om.set("top", str(margin.get("top", 0)))
         om.set("bottom", str(margin.get("bottom", 0)))
 
+        # lineShape from SHAPE_COMPONENT's line/border properties
+        src = sc_content if sc_content else {}
+        line_props = src.get("line", src.get("border", {}))
+        if line_props:
+            ls = sub(elem, "hp", "lineShape")
+            line_color = line_props.get("color", 0)
+            line_width = line_props.get("width", 0)
+            line_flags = line_props.get("flags", 0)
+            line_stroke = line_flags & 0x1F
+            ls.set("color", vm.color_from_int(line_color))
+            ls.set("width", str(line_width))
+            ls.set("type", vm.STROKE_TYPE_MAP.get(line_stroke, "SOLID"))
+            # endCap and headStyle/tailStyle
+            ls.set("endCap", "FLAT")
+            head_style = (line_flags >> 10) & 0x0F
+            tail_style = (line_flags >> 14) & 0x0F
+            ls.set("headStyle", _arrow_style(head_style))
+            ls.set("tailStyle", _arrow_style(tail_style))
+
+        # fillBrush from SHAPE_COMPONENT fill data
+        fill_flags = src.get("fill_flags", 0)
+        if fill_flags & 0x01:  # has solid fill
+            face_color = src.get("fill_face_color", src.get("fill_color", None))
+            if face_color is not None:
+                fb = sub(elem, "hc", "fillBrush")
+                wb = sub(fb, "hc", "winBrush")
+                wb.set("faceColor", vm.color_from_int(face_color))
+                wb.set("hatchColor", "#FF000000")
+                wb.set("alpha", "0")
+
     def _build_picture(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
         """Build hp:pic element for an image."""
         pic = sub(parent, "hp", "pic")
-        self._gso_common_attrs(pic, ctrl_content, "PICTURE")
+        self._gso_common_attrs(pic, ctrl_content, "PICTURE", sc_content)
 
         # Find SHAPE_COMPONENT_PICTURE child
         for i in range(children_start, children_end):
@@ -652,7 +760,7 @@ class ConversionContext:
     def _build_rectangle(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
         """Build hp:rect element for a text box / rectangle shape."""
         rect_elem = sub(parent, "hp", "rect")
-        self._gso_common_attrs(rect_elem, ctrl_content, "PICTURE")
+        self._gso_common_attrs(rect_elem, ctrl_content, "PICTURE", sc_content)
         rect_elem.set("dropcapstyle", "None")
 
         # Find SHAPE_COMPONENT_RECTANGLE for coordinates
@@ -728,10 +836,24 @@ class ConversionContext:
                 self.pos = old_pos
                 break
 
+    def _make_child_ctrl_content(self, parent_ctrl_content, child_sc_content):
+        """Create a ctrl_content-like dict for a child shape inside a container,
+        using the child's own dimensions from its SHAPE_COMPONENT record."""
+        child_ctrl = dict(parent_ctrl_content)
+        # Compute final dimensions from the full scalerotation chain
+        final_w, final_h = _compute_final_dimensions(child_sc_content)
+        if final_w is not None:
+            child_ctrl["width"] = final_w
+        if final_h is not None:
+            child_ctrl["height"] = final_h
+        child_ctrl["x"] = child_sc_content.get("x_in_group", 0)
+        child_ctrl["y"] = child_sc_content.get("y_in_group", 0)
+        return child_ctrl
+
     def _build_container(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
         """Build hp:container element for grouped shapes."""
         container = sub(parent, "hp", "container")
-        self._gso_common_attrs(container, ctrl_content, "PICTURE")
+        self._gso_common_attrs(container, ctrl_content, "PICTURE", sc_content)
 
         # Process child SHAPE_COMPONENTs
         i = children_start
@@ -748,14 +870,19 @@ class ConversionContext:
                         break
                     child_end += 1
 
+                # Build child ctrl_content with child's own dimensions
+                child_ctrl = self._make_child_ctrl_content(ctrl_content, child_sc)
+
                 if child_chid == "$pic":
-                    self._build_picture(container, ctrl_content, child_sc, i + 1, child_end, sc_level + 1)
+                    self._build_picture(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
                 elif child_chid == "$rec":
-                    self._build_rectangle(container, ctrl_content, child_sc, i + 1, child_end, sc_level + 1)
+                    self._build_rectangle(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
                 elif child_chid == "$lin":
-                    self._build_line_shape(container, ctrl_content, child_sc, i + 1, child_end, sc_level + 1)
+                    self._build_line_shape(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
+                elif child_chid == "$ell":
+                    self._build_ellipse(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
                 elif child_chid == "$con":
-                    self._build_container(container, ctrl_content, child_sc, i + 1, child_end, sc_level + 1)
+                    self._build_container(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
 
                 i = child_end
             else:
@@ -764,7 +891,7 @@ class ConversionContext:
     def _build_line_shape(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
         """Build hp:line element for a line shape."""
         line = sub(parent, "hp", "line")
-        self._gso_common_attrs(line, ctrl_content, "PICTURE")
+        self._gso_common_attrs(line, ctrl_content, "PICTURE", sc_content)
 
         # Find SHAPE_COMPONENT_LINE child
         for i in range(children_start, children_end):
@@ -773,8 +900,32 @@ class ConversionContext:
                 lc = m.get("content", {})
                 p0 = lc.get("p0", {"x": 0, "y": 0})
                 p1 = lc.get("p1", {"x": 0, "y": 0})
-                sub(line, "hp", "startPt", {"x": str(p0.get("x", 0)), "y": str(p0.get("y", 0))})
-                sub(line, "hp", "endPt", {"x": str(p1.get("x", 0)), "y": str(p1.get("y", 0))})
+                # Transform through scalerotation chain for actual coordinates
+                x0, y0 = _transform_point(p0.get("x", 0), p0.get("y", 0), sc_content)
+                x1, y1 = _transform_point(p1.get("x", 0), p1.get("y", 0), sc_content)
+                sub(line, "hp", "startPt", {"x": str(x0), "y": str(y0)})
+                sub(line, "hp", "endPt", {"x": str(x1), "y": str(y1)})
+                break
+
+    def _build_ellipse(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+        """Build hp:ellipse element for an ellipse shape."""
+        ellipse = sub(parent, "hp", "ellipse")
+        self._gso_common_attrs(ellipse, ctrl_content, "PICTURE", sc_content)
+
+        # Find SHAPE_COMPONENT_ELLIPSE child
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT_ELLIPSE":
+                ec = m.get("content", {})
+                cx = ec.get("cx", 0)
+                cy = ec.get("cy", 0)
+                rx = ec.get("rx", 0)
+                ry = ec.get("ry", 0)
+                ellipse.set("intervalDirty", "0")
+                ellipse.set("hasArcPr", "0")
+                sub(ellipse, "hp", "ax", {"x": str(cx + rx), "y": str(cy)})
+                sub(ellipse, "hp", "ay", {"x": str(cx), "y": str(cy + ry)})
+                sub(ellipse, "hp", "center", {"x": str(cx), "y": str(cy)})
                 break
 
     # ---------- Helper builders ----------
