@@ -64,10 +64,11 @@ Only 3 minor differences remain:
 
 ## Known Limitations
 
-- **GSO (Graphical Shape Objects)**: Shapes, images, drawing objects, lines, rectangles, ellipses, arcs, polygons, curves, textart, OLE objects are **stubbed out** — the inline builder silently skips them. Files convert without errors but graphic content is missing from output.
+- **GSO (Graphical Shape Objects)**: Images, rectangles, lines, containers, ellipses implemented. Arcs, polygons, curves, textart, OLE objects still stubbed.
 - **Header/footer content**: Fully implemented — text, styling, alignment, and page placement (BOTH/EVEN/ODD) all converted correctly.
-- **Footnote/endnote content**: Control recognized but body text not converted.
-- **Field begin/end**: Hyperlinks, bookmarks, page numbers — control chars recognized but not rendered as HWPX field elements.
+- **Footnote/endnote content**: Fully implemented — body text with proper formatting.
+- **Autonomous inline controls**: `pgnp` (page number position), `pghd` (page hiding), `nwno` (new numbering) fully implemented. `tcps` (table cell paragraph shape) stubbed.
+- **Field begin/end**: Hyperlinks, bookmarks — control chars recognized but not rendered as HWPX field elements.
 - **Equations**: Equation control recognized but formula content not converted.
 
 ## Commands Used
@@ -135,3 +136,35 @@ print(f'{passed}/{passed+failed} passed, {failed} failed')
 **Fix**: `reader.py` line 138-141 — reversed byte order in `get_file_header()`.
 **Commit**: `7ed4c2b`
 **Test results**: 43/43 pass (33 test suite + 10 real-world HWP files).
+
+### Fidelity Improvements: hp:pic Structure & Inline Controls (2026-03-30)
+
+**Golden sample**: `★2022년 행정안전부 주요업무 추진계획(최종).hwp`
+
+**1. hp:pic element structure simplified to match Hancom reference**
+
+| Before (verbose) | After (matches Hancom) |
+|---|---|
+| 16 child elements: offset, orgSz, curSz, flip, rotationInfo, renderingInfo(3 matrices), imgRect, imgClip, inMargin, imgDim, hc:img(leaf), effects, sz, pos, outMargin, shapeComment | 5 child elements: sz, pos, outMargin, shapeComment, hc:img(hc:imgRect, hc:imgClip) |
+| Extra pic attrs: dropcapstyle, href, groupLevel, instid, reverse | Clean attrs: id, zOrder, numberingType, textWrap, textFlow, lock |
+| imgRect/imgClip as hp: children of hp:pic | imgRect/imgClip as hc: children of hc:img |
+
+**2. Autonomous inline controls implemented (code 21)**
+
+Previously silently consumed. Now generates correct HWPX elements:
+
+| HWP chid | HWPX element | Description |
+|---|---|---|
+| `pgnp` | `<hp:ctrl><hp:pageNum pos=".." formatType=".." sideChar=".."/></hp:ctrl>` | Page number position (flags: bits 8-11=position, bits 0-3=format) |
+| `pghd` | `<hp:ctrl><hp:pageHiding hideHeader=".." hideFooter=".." hideMasterPage=".." hideBorder=".." hideFill=".." hidePageNum=".."/></hp:ctrl>` | Page hiding definition (flags: bit 0-5 = hide flags) |
+| `nwno` | `<hp:ctrl><hp:newNum num=".." numType="PAGE"/></hp:ctrl>` | New numbering reset |
+| `tcps` | (stubbed) | Table cell paragraph shape override |
+
+**Files changed**: `section_converter.py`
+**Test results**: 43/43 pass (33 test suite + 10 real-world HWP files).
+
+**Remaining differences vs golden reference** (for future work):
+- 16 extra paragraphs in table cell subLists (cell boundary detection)
+- 2 extra pics from WMF bindata (276-byte decorative metafiles)
+- 4 extra lineShape elements on shapes
+- 4 extra tab elements
