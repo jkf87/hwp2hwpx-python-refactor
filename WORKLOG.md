@@ -123,3 +123,15 @@ print(f'{passed}/{passed+failed} passed, {failed} failed')
 
 **Files changed**: `converter.py`, `section_converter.py`
 **All 34 test cases pass** after changes.
+
+### Root Cause Found: FileHeader Version Byte Order (2026-03-30)
+
+**Root cause**: `reader.py` was reading the HWP5 FileHeader version DWORD at offset 32 in big-endian order (`data[32]=major`), but the format is **little-endian**: `[build_lo, build_hi/micro, minor, major]`. For the failing file, bytes were `00 01 01 05`, so:
+- **Before (wrong)**: `major=0, minor=1, micro=1, build=5` → Hancom rejected `major="0"`
+- **After (correct)**: `major=5, minor=1, micro=1, build=0` → Hancom opens successfully
+
+**Verification**: Opened `hancom_test_v2.hwpx` in Hancom Office HWP on macOS — document renders correctly with all text, tables, and embedded images visible. Both the minimal variant and the full converted file open without errors.
+
+**Fix**: `reader.py` line 138-141 — reversed byte order in `get_file_header()`.
+**Commit**: `7ed4c2b`
+**Test results**: 43/43 pass (33 test suite + 10 real-world HWP files).
