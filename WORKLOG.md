@@ -103,3 +103,23 @@ print(f'{passed}/{passed+failed} passed, {failed} failed')
 ## Timeline
 
 - **2026-03-30**: Initial audit, architecture design, full implementation, iterative bug fixing, 41/41 test pass rate achieved.
+- **2026-03-30**: Hancom compatibility triage for failing file `1-3. (260313_한준구) 찾아가는 저널리즘 특강_강사 강의 확인서.hwp`.
+
+### Hancom Compatibility Fixes (2026-03-30)
+
+**Failing-file triage**: Compared generated HWPX against reference HWPX files created by Hancom Hangul. Found 6 structural differences:
+
+| Issue | Before | After (matches reference) |
+|-------|--------|--------------------------|
+| `manifest.xml` namespace | `<manifest/>` (no namespace) | `<odf:manifest xmlns:odf="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>` |
+| BinData ZIP path | `Contents/BinData/image1.jpg` | `BinData/image1.jpg` (root level) |
+| `content.hpf` image item `id` | `bindata1` | `image1` |
+| `content.hpf` image item `href` | `Contents/BinData/image1.jpg` | `BinData/image1.jpg` |
+| `content.hpf` image item missing `isEmbeded` | (absent) | `isEmbeded="1"` |
+| `content.hpf` spine `linear` attr | (absent) | `linear="yes"` |
+| `hp:pic` child element order | `sz, pos, outMargin, shapeComment, hc:img(imgRect, imgClip)` | `offset, orgSz, curSz, flip, rotationInfo, renderingInfo, imgRect, imgClip, inMargin, imgDim, hc:img(leaf), effects, sz, pos, outMargin, shapeComment` |
+| `hc:img binaryItemIDRef` | Numeric `"1"` | String `"image1"` |
+| `imgRect`/`imgClip` namespace | `hc:` (children of `hc:img`) | `hp:` (children of `hp:pic`) |
+
+**Files changed**: `converter.py`, `section_converter.py`
+**All 34 test cases pass** after changes.

@@ -88,7 +88,7 @@ def convert(reader):
             ext = bindata.get("ext", "png")
             data = reader.get_bindata_bytes(storage_id, ext)
             if data:
-                files[f"Contents/BinData/image{i + 1}.{ext}"] = data
+                files[f"BinData/image{i + 1}.{ext}"] = data
 
     return files
 
@@ -128,8 +128,8 @@ def _build_container_xml():
 
 
 def _build_manifest_xml():
-    """Build META-INF/manifest.xml (minimal)."""
-    return b'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><manifest/>'
+    """Build META-INF/manifest.xml (minimal, with ODF namespace)."""
+    return b'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><odf:manifest xmlns:odf="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>'
 
 
 def _build_content_hpf(reader):
@@ -190,9 +190,10 @@ def _build_content_hpf(reader):
             ext = bindata.get("ext", "png")
             media_info = vm.IMAGE_TYPE_MAP.get(ext.lower(), ("application/octet-stream", ""))
             item = sub(manifest, "opf", "item")
-            item.set("id", f"bindata{j + 1}")
-            item.set("href", f"Contents/BinData/image{j + 1}.{ext}")
+            item.set("id", f"image{j + 1}")
+            item.set("href", f"BinData/image{j + 1}.{ext}")
             item.set("media-type", media_info[0])
+            item.set("isEmbeded", "1")
 
     item_settings = sub(manifest, "opf", "item")
     item_settings.set("id", "settings")
@@ -201,9 +202,9 @@ def _build_content_hpf(reader):
 
     # spine
     spine = sub(root, "opf", "spine")
-    sub(spine, "opf", "itemref", {"idref": "header"})
+    sub(spine, "opf", "itemref", {"idref": "header", "linear": "yes"})
     for i in range(section_count):
-        sub(spine, "opf", "itemref", {"idref": f"section{i}"})
+        sub(spine, "opf", "itemref", {"idref": f"section{i}", "linear": "yes"})
 
     return to_xml_bytes(root)
 

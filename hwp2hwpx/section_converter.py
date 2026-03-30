@@ -918,12 +918,128 @@ class ConversionContext:
                 wb.set("hatchColor", "#FF000000")
                 wb.set("alpha", "0")
 
-    def _build_picture(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
-        """Build hp:pic element for an image."""
-        pic = sub(parent, "hp", "pic")
-        self._gso_common_attrs(pic, ctrl_content, "PICTURE", sc_content)
+    def _gso_common_attrs_tail(self, elem, ctrl_content, sc_content=None):
+        """Emit sz, pos, outMargin as trailing children (for pic elements where these come last)."""
+        ctrl_flags = ctrl_content.get("flags", 0)
 
-        # Find SHAPE_COMPONENT_PICTURE child
+        # hp:sz
+        sz = sub(elem, "hp", "sz")
+        sz.set("width", str(ctrl_content.get("width", 0)))
+        sz.set("widthRelTo", "ABSOLUTE")
+        sz.set("height", str(ctrl_content.get("height", 0)))
+        sz.set("heightRelTo", "ABSOLUTE")
+        sz.set("protect", "0")
+
+        # hp:pos
+        pos = sub(elem, "hp", "pos")
+        pos.set("treatAsChar", str((ctrl_flags >> 0) & 0x01))
+        pos.set("affectLSpacing", str((ctrl_flags >> 2) & 0x01))
+        pos.set("flowWithText", str((ctrl_flags >> 17) & 0x01))
+        pos.set("allowOverlap", str((ctrl_flags >> 18) & 0x01))
+        pos.set("holdAnchorAndSO", "0")
+
+        vert_rel = (ctrl_flags >> 3) & 0x03
+        horz_rel = (ctrl_flags >> 8) & 0x03
+        vert_align = (ctrl_flags >> 10) & 0x07
+        horz_align = (ctrl_flags >> 14) & 0x07
+
+        pos.set("vertRelTo", vm.VERT_REL_TO_MAP.get(vert_rel, "PARA"))
+        pos.set("horzRelTo", vm.HORZ_REL_TO_MAP.get(horz_rel, "COLUMN"))
+        pos.set("vertAlign", vm.VERT_ALIGN_MAP.get(vert_align, "TOP"))
+        pos.set("horzAlign", vm.HORZ_ALIGN_MAP.get(horz_align, "LEFT"))
+        pos.set("vertOffset", str(ctrl_content.get("y", 0)))
+        pos.set("horzOffset", str(ctrl_content.get("x", 0)))
+
+        # hp:outMargin
+        margin = ctrl_content.get("margin", {})
+        om = sub(elem, "hp", "outMargin")
+        om.set("left", str(margin.get("left", 0)))
+        om.set("right", str(margin.get("right", 0)))
+        om.set("top", str(margin.get("top", 0)))
+        om.set("bottom", str(margin.get("bottom", 0)))
+
+    def _build_picture(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+        """Build hp:pic element for an image.
+
+        Hancom HWPX reference element order:
+        hp:pic attrs → hp:offset, hp:orgSz, hp:curSz, hp:flip, hp:rotationInfo,
+        hp:renderingInfo, hp:imgRect, hp:imgClip, hp:inMargin, hp:imgDim,
+        hc:img (leaf), hp:effects, hp:sz, hp:pos, hp:outMargin, hp:shapeComment
+        """
+        pic = sub(parent, "hp", "pic")
+
+        # Set top-level attributes (before child elements)
+        pic.set("id", str(ctrl_content.get("instance_id", 0)))
+        pic.set("zOrder", str(ctrl_content.get("z_order", 0)))
+        pic.set("numberingType", "PICTURE")
+        ctrl_flags = ctrl_content.get("flags", 0)
+        text_wrap_type = (ctrl_flags >> 21) & 0x07
+        text_flow = (ctrl_flags >> 24) & 0x03
+        pic.set("textWrap", vm.TEXT_WRAP_MAP.get(text_wrap_type, "TOP_AND_BOTTOM"))
+        pic.set("textFlow", vm.TEXT_FLOW_MAP.get(text_flow, "BOTH_SIDES"))
+        pic.set("lock", "0")
+        pic.set("dropcapstyle", "None")
+        pic.set("href", "")
+        pic.set("groupLevel", "0")
+        pic.set("instid", str(ctrl_content.get("instance_id", 0)))
+        pic.set("reverse", "0")
+
+        # hp:offset
+        offset_el = sub(pic, "hp", "offset")
+        offset_el.set("x", str(ctrl_content.get("x", 0)))
+        offset_el.set("y", str(ctrl_content.get("y", 0)))
+
+        # hp:orgSz - original size from SHAPE_COMPONENT
+        org_w = sc_content.get("initial_width", ctrl_content.get("width", 0))
+        org_h = sc_content.get("initial_height", ctrl_content.get("height", 0))
+        org_sz = sub(pic, "hp", "orgSz")
+        org_sz.set("width", str(org_w))
+        org_sz.set("height", str(org_h))
+
+        # hp:curSz - current size
+        cur_w = ctrl_content.get("width", 0)
+        cur_h = ctrl_content.get("height", 0)
+        cur_sz = sub(pic, "hp", "curSz")
+        cur_sz.set("width", str(cur_w))
+        cur_sz.set("height", str(cur_h))
+
+        # hp:flip
+        flip = sub(pic, "hp", "flip")
+        flip.set("horizontal", "0")
+        flip.set("vertical", "0")
+
+        # hp:rotationInfo
+        rot = sub(pic, "hp", "rotationInfo")
+        rot.set("angle", "0")
+        rot.set("centerX", str(cur_w // 2))
+        rot.set("centerY", str(cur_h // 2))
+        rot.set("rotateimage", "1")
+
+        # hp:renderingInfo
+        ri = sub(pic, "hp", "renderingInfo")
+        trans = sub(ri, "hc", "transMatrix")
+        trans.set("e1", "1")
+        trans.set("e2", "0")
+        trans.set("e3", "0")
+        trans.set("e4", "0")
+        trans.set("e5", "1")
+        trans.set("e6", "0")
+        sca = sub(ri, "hc", "scaMatrix")
+        sca.set("e1", "1")
+        sca.set("e2", "0")
+        sca.set("e3", "0")
+        sca.set("e4", "0")
+        sca.set("e5", "1")
+        sca.set("e6", "0")
+        rotm = sub(ri, "hc", "rotMatrix")
+        rotm.set("e1", "1")
+        rotm.set("e2", "0")
+        rotm.set("e3", "0")
+        rotm.set("e4", "0")
+        rotm.set("e5", "1")
+        rotm.set("e6", "0")
+
+        # Find SHAPE_COMPONENT_PICTURE child for image-specific data
         for i in range(children_start, children_end):
             m = self.models[i]
             if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT_PICTURE":
@@ -933,42 +1049,67 @@ class ConversionContext:
 
                 # Resolve bindata_id to file reference
                 bin_data_list = self.reader.get_bin_data_list()
+                img_ref = f"image{bindata_id}"
                 if 0 < bindata_id <= len(bin_data_list):
                     bd = bin_data_list[bindata_id - 1]
                     bindata = bd.get("bindata", {})
                     ext = bindata.get("ext", "png")
-                    img_ref = f"image{bindata_id}.{ext}"
+                    img_ref = f"image{bindata_id}"
+                    # For imgDim, get actual image dimensions
+                    dim_w = pic_content.get("clip", {}).get("right", cur_w)
+                    dim_h = pic_content.get("clip", {}).get("bottom", cur_h)
                 else:
-                    img_ref = f"image{bindata_id}.png"
+                    ext = "png"
+                    dim_w = cur_w
+                    dim_h = cur_h
 
-                # shapeComment (caption text - empty)
-                sub(pic, "hp", "shapeComment", text="")
-
-                # hc:img
-                img = sub(pic, "hc", "img")
-                img.set("binaryItemIDRef", str(bindata_id))
-                img.set("bright", str(picture.get("brightness", 0)))
-                img.set("contrast", str(picture.get("contrast", 0)))
-                effect = picture.get("effect", 0)
-                img.set("effect", vm.PICTURE_EFFECT_MAP.get(effect, "REAL_PIC"))
-
-                # imgRect
+                # hp:imgRect (under hp: namespace, child of hp:pic)
                 rect = pic_content.get("rect", {})
-                img_rect = sub(img, "hc", "imgRect")
+                img_rect = sub(pic, "hp", "imgRect")
                 for pt_name in ["pt0", "pt1", "pt2", "pt3"]:
                     src_name = pt_name.replace("pt", "p")
                     pt = rect.get(src_name, {"x": 0, "y": 0})
                     sub(img_rect, "hc", pt_name, {"x": str(pt.get("x", 0)), "y": str(pt.get("y", 0))})
 
-                # imgClip
+                # hp:imgClip (under hp: namespace, child of hp:pic)
                 clip = pic_content.get("clip", {})
-                img_clip = sub(img, "hc", "imgClip")
+                img_clip = sub(pic, "hp", "imgClip")
                 img_clip.set("left", str(clip.get("left", 0)))
                 img_clip.set("right", str(clip.get("right", 0)))
                 img_clip.set("top", str(clip.get("top", 0)))
                 img_clip.set("bottom", str(clip.get("bottom", 0)))
 
+                # hp:inMargin
+                in_margin = sub(pic, "hp", "inMargin")
+                in_margin.set("left", "0")
+                in_margin.set("right", "0")
+                in_margin.set("top", "0")
+                in_margin.set("bottom", "0")
+
+                # hp:imgDim
+                img_dim = sub(pic, "hp", "imgDim")
+                img_dim.set("dimwidth", str(dim_w))
+                img_dim.set("dimheight", str(dim_h))
+
+                # hc:img (leaf element - no children)
+                img = sub(pic, "hc", "img")
+                img.set("binaryItemIDRef", img_ref)
+                img.set("bright", str(picture.get("brightness", 0)))
+                img.set("contrast", str(picture.get("contrast", 0)))
+                effect = picture.get("effect", 0)
+                img.set("effect", vm.PICTURE_EFFECT_MAP.get(effect, "REAL_PIC"))
+                img.set("alpha", "0")
+
+                # hp:effects (empty)
+                sub(pic, "hp", "effects")
+
                 break
+
+        # hp:sz, hp:pos, hp:outMargin, hp:shapeComment come AFTER picture-specific elements
+        self._gso_common_attrs_tail(pic, ctrl_content, sc_content)
+
+        # hp:shapeComment
+        sub(pic, "hp", "shapeComment", text="")
 
     def _build_rectangle(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
         """Build hp:rect element for a text box / rectangle shape."""
