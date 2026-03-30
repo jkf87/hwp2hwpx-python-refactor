@@ -184,9 +184,31 @@ Target: `★2022년 행정안전부 주요업무 추진계획(최종).hwp`
 | Table cell vertAlign/textDirection from listflags | `74e10c1` | Cell text was vertically centered instead of top-aligned |
 | Gradation fill support (fillflags & 0x04) | `afc7659` | Gradient backgrounds in table headers now rendered |
 
+| BinData decompression for BMP/WMF images | `b1ecfb0` | BMP/WMF images were zlib-compressed in HWPX output |
+| Handle tcps (code 23) control char | `d7aa846` | Control index desync when tcps appeared in text |
+
 **Current state** (target file):
-- 569 paragraphs, 2592 runs, 62 tables, 15 GSO shapes
-- All borderFill IDs valid (1-77), all charPr IDs valid (0-503)
+- 569 paragraphs, 2592 runs, 62 tables, 194 cells, 15 GSO shapes, 9 images
+- All IDs valid: borderFill (1-77), charPr (0-503), paraPr (0-305), style (0-29)
 - Correct fill colors: #DFE6F7 (light blue headers), #3E57A5 (dark blue), #FFFFE5 (yellow), etc.
 - Correct border types: SOLID, DOUBLE_SLIM, DOT mapped correctly
+- All images decompressed: BMP (BM header), WMF (placeable WMF header), JPG, PNG
+- Text correctly split across 490 unique char shape styles
+- Paragraph margins properly halved for HwpUnitChar case, raw for default
 - 33/33 test suite files pass
+
+**Structural metric comparison (source vs output):**
+
+| Metric | Source | Output | Match |
+|--------|--------|--------|-------|
+| Paragraphs | 569 | 569 | ✓ |
+| Tables | 62 | 62 | ✓ |
+| Table cells | 194 | 194 | ✓ |
+| Pictures | 10 | 10 | ✓ |
+| Line segments | 569 | 569 | ✓ |
+
+**Remaining known limitations:**
+- Field controls (bookmarks, hyperlinks) not implemented
+- Equations not implemented
+- Advanced GSO shapes (arc, polygon, curve, textart, OLE) stubbed
+- tcps generates no HWPX output (consumed but not converted)
