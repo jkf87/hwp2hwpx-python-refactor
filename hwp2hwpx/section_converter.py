@@ -232,13 +232,27 @@ class ConversionContext:
                 continue
             pos_range, value = chunk[0], chunk[1]
             char_pos = pos_range[0] if isinstance(pos_range, tuple) else 0
-            cs_id = get_charshape_id(char_pos)
-            ensure_run(cs_id)
 
             if isinstance(value, str):
-                text_buffer.append(value)
+                # Split text at char shape boundaries
+                text = value
+                text_start = char_pos
+                idx = 0
+                while idx < len(text):
+                    cs_id = get_charshape_id(text_start + idx)
+                    ensure_run(cs_id)
+                    # Find how far this char shape extends
+                    seg_start = idx
+                    while idx < len(text):
+                        next_cs = get_charshape_id(text_start + idx)
+                        if next_cs != cs_id:
+                            break
+                        idx += 1
+                    text_buffer.append(text[seg_start:idx])
             elif isinstance(value, dict):
                 code = value.get("code", 0)
+                cs_id = get_charshape_id(char_pos)
+                ensure_run(cs_id)
 
                 if code == 13:
                     flush_text()
