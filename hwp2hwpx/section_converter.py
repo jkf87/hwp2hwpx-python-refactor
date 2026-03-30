@@ -276,6 +276,27 @@ class ConversionContext:
                             self._build_table_inline(current_run, ctrl_model, start + 1, end)
                         elif chid.strip() == "gso":
                             self._build_gso_inline(current_run, ctrl_model, start + 1, end)
+                elif code == 16:
+                    # Header/Footer control
+                    flush_text()
+                    if ctrl_idx < len(ctrl_positions):
+                        chid, start, end = ctrl_positions[ctrl_idx]
+                        ctrl_idx += 1
+                        ctrl_model = self.models[start]
+                        if chid == "head":
+                            self._build_header_footer_inline(
+                                current_run, ctrl_model, start + 1, end, "header"
+                            )
+                        elif chid == "foot":
+                            self._build_header_footer_inline(
+                                current_run, ctrl_model, start + 1, end, "footer"
+                            )
+                elif code == 21:
+                    # Autonomous inline control (pgnp, pghd, nwno, etc.)
+                    flush_text()
+                    if ctrl_idx < len(ctrl_positions):
+                        chid, start, end = ctrl_positions[ctrl_idx]
+                        ctrl_idx += 1
                 elif code == 3 or code == 4:
                     pass  # Field begin/end
 
@@ -412,6 +433,73 @@ class ConversionContext:
         col_pr.set("colCount", str(col_count if col_count > 0 else 1))
         col_pr.set("sameSz", str(same_sz))
         col_pr.set("sameGap", str(content.get("spacing", 0)))
+
+    def _build_header_footer_inline(self, run, ctrl_model, children_start, children_end, tag_name):
+        """Build header or footer element inside a run element.
+
+        tag_name is either 'header' or 'footer'.
+        HWP structure: CTRL_HEADER(head/foot) → LIST_HEADER → paragraphs
+        HWPX: <hp:ctrl><hp:header|footer><hp:subList><hp:p>...</hp:p></hp:subList></hp:header|footer></hp:ctrl>
+        """
+        content = ctrl_model.get("content", {})
+        ctrl_level = ctrl_model.get("level", 1)
+
+        # Flags bits 0-1: places (BOTH_PAGES=0, EVEN_PAGE=1, ODD_PAGE=2)
+        flags = content.get("flags", 0)
+        places = flags & 0x03
+        places_map = {0: "BOTH", 1: "EVEN", 2: "ODD"}
+
+        ctrl = sub(run, "hp", "ctrl")
+        hf_elem = sub(ctrl, "hp", tag_name)
+        hf_elem.set("id", "")
+        hf_elem.set("applyPageType", places_map.get(places, "BOTH"))
+
+        # Find LIST_HEADER child
+        list_header = None
+        para_start = children_start
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_LIST_HEADER" and m.get("level", 0) == ctrl_level + 1:
+                list_header = m.get("content", {})
+                para_start = i + 1
+                break
+
+        # Build subList
+        sub_list = sub(hf_elem, "hp", "subList")
+        sub_list.set("id", "")
+        sub_list.set("textDirection", "HORIZONTAL")
+        sub_list.set("lineWrap", "BREAK")
+
+        if list_header:
+            lf = list_header.get("listflags", 0)
+            valign_val = (lf >> 5) & 0x03
+            valign_map = {0: "TOP", 1: "CENTER", 2: "BOTTOM"}
+            sub_list.set("vertAlign", valign_map.get(valign_val, "TOP"))
+            sub_list.set("linkListIDRef", "0")
+            sub_list.set("linkListNextIDRef", "0")
+            sub_list.set("textWidth", str(list_header.get("width", 0)))
+            sub_list.set("textHeight", str(list_header.get("height", 0)))
+            sub_list.set("hasTextRef", str(list_header.get("textrefsbitmap", 0)))
+            sub_list.set("hasNumRef", str(list_header.get("numberrefsbitmap", 0)))
+        else:
+            sub_list.set("vertAlign", "TOP")
+            sub_list.set("linkListIDRef", "0")
+            sub_list.set("linkListNextIDRef", "0")
+            sub_list.set("textWidth", "0")
+            sub_list.set("textHeight", "0")
+            sub_list.set("hasTextRef", "0")
+            sub_list.set("hasNumRef", "0")
+
+        # Process paragraphs within the header/footer
+        saved_pos = self.pos
+        self.pos = para_start
+        while self.pos < children_end:
+            m = self.models[self.pos]
+            if m.get("tagname") == "HWPTAG_PARA_HEADER" and m.get("level", 0) == ctrl_level + 1:
+                self._process_paragraph(sub_list)
+            else:
+                self.pos += 1
+        self.pos = saved_pos
 
     def _build_table_inline(self, run, ctrl_model, children_start, children_end):
         """Build table element inside a run element."""
