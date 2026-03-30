@@ -336,6 +336,13 @@ TEXT_DIRECTION_MAP = {
     1: "VERTICAL",
 }
 
+# Cell vertical alignment (listflags bits 8-9)
+CELL_VERT_ALIGN_MAP = {
+    0: "TOP",
+    1: "CENTER",
+    2: "BOTTOM",
+}
+
 # Font family type (from PANOSE)
 FAMILY_TYPE_MAP = {
     0: "FCAT_UNKNOWN",

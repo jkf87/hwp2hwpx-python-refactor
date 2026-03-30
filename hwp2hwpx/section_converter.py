@@ -831,9 +831,11 @@ class ConversionContext:
         # subList
         sl = sub(tc, "hp", "subList")
         sl.set("id", "")
-        sl.set("textDirection", "HORIZONTAL")
+        text_dir = (list_flags >> 16) & 0x03
+        sl.set("textDirection", vm.TEXT_DIRECTION_MAP.get(text_dir, "HORIZONTAL"))
         sl.set("lineWrap", "BREAK")
-        sl.set("vertAlign", "CENTER")
+        vert_align = (list_flags >> 8) & 0x03
+        sl.set("vertAlign", vm.CELL_VERT_ALIGN_MAP.get(vert_align, "TOP"))
         sl.set("linkListIDRef", "0")
         sl.set("linkListNextIDRef", "0")
         sl.set("textWidth", str(cell_content.get("width", 0)))
