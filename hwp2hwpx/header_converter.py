@@ -218,6 +218,14 @@ def _build_char_properties(ref_list, reader):
             cp.set("bold", "1")
         if flags["italic"]:
             cp.set("italic", "1")
+        if flags["emboss"]:
+            cp.set("emboss", "1")
+        if flags["engrave"]:
+            cp.set("engrave", "1")
+        if flags["superscript"]:
+            cp.set("superscript", "1")
+        if flags["subscript"]:
+            cp.set("subscript", "1")
 
         # fontRef
         font_face = cs.get("font_face", {})
