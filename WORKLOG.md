@@ -65,7 +65,7 @@ Only 3 minor differences remain:
 ## Known Limitations
 
 - **GSO (Graphical Shape Objects)**: Shapes, images, drawing objects, lines, rectangles, ellipses, arcs, polygons, curves, textart, OLE objects are **stubbed out** — the inline builder silently skips them. Files convert without errors but graphic content is missing from output.
-- **Header/footer content**: Control structure recognized but inner content not fully rendered.
+- **Header/footer content**: Fully implemented — text, styling, alignment, and page placement (BOTH/EVEN/ODD) all converted correctly.
 - **Footnote/endnote content**: Control recognized but body text not converted.
 - **Field begin/end**: Hyperlinks, bookmarks, page numbers — control chars recognized but not rendered as HWPX field elements.
 - **Equations**: Equation control recognized but formula content not converted.
