@@ -291,6 +291,29 @@ class ConversionContext:
                             self._build_header_footer_inline(
                                 current_run, ctrl_model, start + 1, end, "footer"
                             )
+                elif code == 17:
+                    # Footnote/Endnote reference
+                    flush_text()
+                    if ctrl_idx < len(ctrl_positions):
+                        chid, start, end = ctrl_positions[ctrl_idx]
+                        ctrl_idx += 1
+                        ctrl_model = self.models[start]
+                        if chid.strip() == "fn":
+                            self._build_footnote_endnote_inline(
+                                current_run, ctrl_model, start + 1, end, "footNote", "FOOTNOTE"
+                            )
+                        elif chid.strip() == "en":
+                            self._build_footnote_endnote_inline(
+                                current_run, ctrl_model, start + 1, end, "endNote", "ENDNOTE"
+                            )
+                elif code == 18:
+                    # Auto number (atno) - used inside footnote/endnote body
+                    flush_text()
+                    if ctrl_idx < len(ctrl_positions):
+                        chid, start, end = ctrl_positions[ctrl_idx]
+                        ctrl_idx += 1
+                        ctrl_model = self.models[start]
+                        self._build_auto_num_inline(current_run, ctrl_model)
                 elif code == 21:
                     # Autonomous inline control (pgnp, pghd, nwno, etc.)
                     flush_text()
@@ -500,6 +523,108 @@ class ConversionContext:
             else:
                 self.pos += 1
         self.pos = saved_pos
+
+    def _build_footnote_endnote_inline(self, run, ctrl_model, children_start, children_end, tag_name, num_type):
+        """Build footNote or endNote element inside a run element.
+
+        tag_name is either 'footNote' or 'endNote'.
+        num_type is 'FOOTNOTE' or 'ENDNOTE'.
+        HWP structure: CTRL_HEADER(fn/en) → LIST_HEADER → paragraphs
+        HWPX: <hp:ctrl><hp:footNote|endNote number=.. suffixChar=.. instId=..>
+                 <hp:subList ...><hp:p>...</hp:p></hp:subList>
+               </hp:footNote|endNote></hp:ctrl>
+        """
+        content = ctrl_model.get("content", {})
+        ctrl_level = ctrl_model.get("level", 1)
+
+        ctrl = sub(run, "hp", "ctrl")
+        note_elem = sub(ctrl, "hp", tag_name)
+        note_elem.set("number", str(content.get("number", 1)))
+        # suffixChar is stored in upper 16 bits of unknown0
+        suffix_char = (content.get("unknown0", 0) >> 16) & 0xFFFF
+        note_elem.set("suffixChar", str(suffix_char))
+        # instId is (unknown3 << 16) | unknown2
+        inst_id = (content.get("unknown3", 0) << 16) | content.get("unknown2", 0)
+        note_elem.set("instId", str(inst_id))
+
+        # Find LIST_HEADER child
+        list_header = None
+        para_start = children_start
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_LIST_HEADER" and m.get("level", 0) == ctrl_level + 1:
+                list_header = m.get("content", {})
+                para_start = i + 1
+                break
+
+        # Build subList
+        sub_list = sub(note_elem, "hp", "subList")
+        sub_list.set("id", "")
+        sub_list.set("textDirection", "HORIZONTAL")
+        sub_list.set("lineWrap", "BREAK")
+
+        if list_header:
+            lf = list_header.get("listflags", 0)
+            valign_val = (lf >> 5) & 0x03
+            valign_map = {0: "TOP", 1: "CENTER", 2: "BOTTOM"}
+            sub_list.set("vertAlign", valign_map.get(valign_val, "TOP"))
+            sub_list.set("linkListIDRef", "0")
+            sub_list.set("linkListNextIDRef", "0")
+            sub_list.set("textWidth", str(list_header.get("width", 0)))
+            sub_list.set("textHeight", str(list_header.get("height", 0)))
+            sub_list.set("hasTextRef", str(list_header.get("textrefsbitmap", 0)))
+            sub_list.set("hasNumRef", str(list_header.get("numberrefsbitmap", 0)))
+        else:
+            sub_list.set("vertAlign", "TOP")
+            sub_list.set("linkListIDRef", "0")
+            sub_list.set("linkListNextIDRef", "0")
+            sub_list.set("textWidth", "0")
+            sub_list.set("textHeight", "0")
+            sub_list.set("hasTextRef", "0")
+            sub_list.set("hasNumRef", "0")
+
+        # Process paragraphs within the footnote/endnote
+        saved_pos = self.pos
+        self.pos = para_start
+        while self.pos < children_end:
+            m = self.models[self.pos]
+            if m.get("tagname") == "HWPTAG_PARA_HEADER" and m.get("level", 0) == ctrl_level + 1:
+                self._process_paragraph(sub_list)
+            else:
+                self.pos += 1
+        self.pos = saved_pos
+
+    def _build_auto_num_inline(self, run, ctrl_model):
+        """Build autoNum element inside a run element.
+
+        HWP: CTRL_HEADER(atno) with flags, number, suffix
+        HWPX: <hp:ctrl><hp:autoNum num=.. numType=..>
+                 <hp:autoNumFormat type=.. suffixChar=.. .../>
+               </hp:autoNum></hp:ctrl>
+        """
+        content = ctrl_model.get("content", {})
+        flags = content.get("flags", 0)
+
+        # flags bits 0-1: numType (1=FOOTNOTE, 2=ENDNOTE, etc.)
+        num_type_val = flags & 0x03
+        num_type_map = {0: "PAGE", 1: "FOOTNOTE", 2: "ENDNOTE", 3: "PICTURE", 4: "TABLE", 5: "EQUATION"}
+        num_type = num_type_map.get(num_type_val, "FOOTNOTE")
+
+        ctrl = sub(run, "hp", "ctrl")
+        auto_num = sub(ctrl, "hp", "autoNum")
+        auto_num.set("num", str(content.get("number", 1)))
+        auto_num.set("numType", num_type)
+
+        # autoNumFormat
+        anf = sub(auto_num, "hp", "autoNumFormat")
+        # Format type from bits 2-5 of flags
+        fmt_type = (flags >> 2) & 0x0F
+        anf.set("type", vm.NUM_FORMAT_MAP.get(fmt_type, "DIGIT"))
+        anf.set("userChar", "")
+        anf.set("prefixChar", "")
+        suffix_val = content.get("suffix", 0)
+        anf.set("suffixChar", vm.SUFFIX_CHAR_MAP.get(suffix_val, chr(suffix_val) if suffix_val > 0 else ""))
+        anf.set("supscript", "0")
 
     def _build_table_inline(self, run, ctrl_model, children_start, children_end):
         """Build table element inside a run element."""
