@@ -199,7 +199,7 @@ class ConversionContext:
                         if chid.strip() == "tbl":
                             self._build_table_inline(current_run, ctrl_model, start + 1, end)
                         elif chid.strip() == "gso":
-                            pass  # GSO stub
+                            self._build_gso_inline(current_run, ctrl_model, start + 1, end)
                 elif code == 3 or code == 4:
                     pass  # Field begin/end
 
@@ -523,14 +523,279 @@ class ConversionContext:
         cm.set("top", str(padding.get("top", 141)))
         cm.set("bottom", str(padding.get("bottom", 141)))
 
+    # ---------- GSO (Graphic/Shape Object) builders ----------
+
+    def _build_gso_inline(self, run, ctrl_model, children_start, children_end):
+        """Build GSO element (picture, rectangle, line, container) inside a run."""
+        content = ctrl_model.get("content", {})
+        ctrl_level = ctrl_model.get("level", 1)
+
+        # Find the top-level SHAPE_COMPONENT to determine shape type
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT" and m.get("level", 0) == ctrl_level + 1:
+                sc_content = m.get("content", {})
+                chid = sc_content.get("chid", "").strip()
+
+                if chid == "$pic":
+                    self._build_picture(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
+                elif chid == "$rec":
+                    self._build_rectangle(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
+                elif chid == "$con":
+                    self._build_container(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
+                elif chid == "$lin":
+                    self._build_line_shape(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
+                # else: unknown shape type, skip
+                break
+
+    def _gso_common_attrs(self, elem, ctrl_content, numbering_type="PICTURE"):
+        """Set common GSO attributes (sz, pos, outMargin) on an element."""
+        elem.set("id", str(ctrl_content.get("instance_id", 0)))
+        elem.set("zOrder", str(ctrl_content.get("z_order", 0)))
+        elem.set("numberingType", numbering_type)
+
+        ctrl_flags = ctrl_content.get("flags", 0)
+        text_wrap_type = (ctrl_flags >> 21) & 0x07
+        text_flow = (ctrl_flags >> 24) & 0x03
+        elem.set("textWrap", vm.TEXT_WRAP_MAP.get(text_wrap_type, "TOP_AND_BOTTOM"))
+        elem.set("textFlow", vm.TEXT_FLOW_MAP.get(text_flow, "BOTH_SIDES"))
+        elem.set("lock", "0")
+
+        # sz
+        sz = sub(elem, "hp", "sz")
+        sz.set("width", str(ctrl_content.get("width", 0)))
+        sz.set("widthRelTo", "ABSOLUTE")
+        sz.set("height", str(ctrl_content.get("height", 0)))
+        sz.set("heightRelTo", "ABSOLUTE")
+        sz.set("protect", "0")
+
+        # pos
+        pos = sub(elem, "hp", "pos")
+        pos.set("treatAsChar", str((ctrl_flags >> 0) & 0x01))
+        pos.set("affectLSpacing", str((ctrl_flags >> 2) & 0x01))
+        pos.set("flowWithText", str((ctrl_flags >> 17) & 0x01))
+        pos.set("allowOverlap", str((ctrl_flags >> 18) & 0x01))
+        pos.set("holdAnchorAndSO", "0")
+
+        vert_rel = (ctrl_flags >> 3) & 0x03
+        horz_rel = (ctrl_flags >> 8) & 0x03
+        vert_align = (ctrl_flags >> 10) & 0x07
+        horz_align = (ctrl_flags >> 14) & 0x07
+
+        pos.set("vertRelTo", vm.VERT_REL_TO_MAP.get(vert_rel, "PARA"))
+        pos.set("horzRelTo", vm.HORZ_REL_TO_MAP.get(horz_rel, "COLUMN"))
+        pos.set("vertAlign", vm.VERT_ALIGN_MAP.get(vert_align, "TOP"))
+        pos.set("horzAlign", vm.HORZ_ALIGN_MAP.get(horz_align, "LEFT"))
+        pos.set("vertOffset", str(ctrl_content.get("y", 0)))
+        pos.set("horzOffset", str(ctrl_content.get("x", 0)))
+
+        # outMargin
+        margin = ctrl_content.get("margin", {})
+        om = sub(elem, "hp", "outMargin")
+        om.set("left", str(margin.get("left", 0)))
+        om.set("right", str(margin.get("right", 0)))
+        om.set("top", str(margin.get("top", 0)))
+        om.set("bottom", str(margin.get("bottom", 0)))
+
+    def _build_picture(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+        """Build hp:pic element for an image."""
+        pic = sub(parent, "hp", "pic")
+        self._gso_common_attrs(pic, ctrl_content, "PICTURE")
+
+        # Find SHAPE_COMPONENT_PICTURE child
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT_PICTURE":
+                pic_content = m.get("content", {})
+                picture = pic_content.get("picture", {})
+                bindata_id = picture.get("bindata_id", 0)
+
+                # Resolve bindata_id to file reference
+                bin_data_list = self.reader.get_bin_data_list()
+                if 0 < bindata_id <= len(bin_data_list):
+                    bd = bin_data_list[bindata_id - 1]
+                    bindata = bd.get("bindata", {})
+                    ext = bindata.get("ext", "png")
+                    img_ref = f"image{bindata_id}.{ext}"
+                else:
+                    img_ref = f"image{bindata_id}.png"
+
+                # shapeComment (caption text - empty)
+                sub(pic, "hp", "shapeComment", text="")
+
+                # hc:img
+                img = sub(pic, "hc", "img")
+                img.set("binaryItemIDRef", str(bindata_id))
+                img.set("bright", str(picture.get("brightness", 0)))
+                img.set("contrast", str(picture.get("contrast", 0)))
+                effect = picture.get("effect", 0)
+                img.set("effect", vm.PICTURE_EFFECT_MAP.get(effect, "REAL_PIC"))
+
+                # imgRect
+                rect = pic_content.get("rect", {})
+                img_rect = sub(img, "hc", "imgRect")
+                for pt_name in ["pt0", "pt1", "pt2", "pt3"]:
+                    src_name = pt_name.replace("pt", "p")
+                    pt = rect.get(src_name, {"x": 0, "y": 0})
+                    sub(img_rect, "hc", pt_name, {"x": str(pt.get("x", 0)), "y": str(pt.get("y", 0))})
+
+                # imgClip
+                clip = pic_content.get("clip", {})
+                img_clip = sub(img, "hc", "imgClip")
+                img_clip.set("left", str(clip.get("left", 0)))
+                img_clip.set("right", str(clip.get("right", 0)))
+                img_clip.set("top", str(clip.get("top", 0)))
+                img_clip.set("bottom", str(clip.get("bottom", 0)))
+
+                break
+
+    def _build_rectangle(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+        """Build hp:rect element for a text box / rectangle shape."""
+        rect_elem = sub(parent, "hp", "rect")
+        self._gso_common_attrs(rect_elem, ctrl_content, "PICTURE")
+        rect_elem.set("dropcapstyle", "None")
+
+        # Find SHAPE_COMPONENT_RECTANGLE for coordinates
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT_RECTANGLE":
+                rc = m.get("content", {})
+                coord = sub(rect_elem, "hp", "pt0")
+                coord.set("x", str(rc.get("p0", {}).get("x", 0)))
+                coord.set("y", str(rc.get("p0", {}).get("y", 0)))
+                coord = sub(rect_elem, "hp", "pt1")
+                coord.set("x", str(rc.get("p1", {}).get("x", 0)))
+                coord.set("y", str(rc.get("p1", {}).get("y", 0)))
+                coord = sub(rect_elem, "hp", "pt2")
+                coord.set("x", str(rc.get("p2", {}).get("x", 0)))
+                coord.set("y", str(rc.get("p2", {}).get("y", 0)))
+                coord = sub(rect_elem, "hp", "pt3")
+                coord.set("x", str(rc.get("p3", {}).get("x", 0)))
+                coord.set("y", str(rc.get("p3", {}).get("y", 0)))
+                break
+
+        # Find LIST_HEADER + paragraphs for text content inside rectangle
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_LIST_HEADER" and m.get("level", 0) == sc_level + 1:
+                lh_content = m.get("content", {})
+                sl = sub(rect_elem, "hp", "subList")
+                sl.set("id", "")
+                sl.set("textDirection", "HORIZONTAL")
+                sl.set("lineWrap", "BREAK")
+                sl.set("vertAlign", "CENTER")
+                sl.set("linkListIDRef", "0")
+                sl.set("linkListNextIDRef", "0")
+                sl.set("textWidth", str(lh_content.get("maxwidth", 0)))
+                sl.set("textHeight", "0")
+                sl.set("hasTextRef", "0")
+                sl.set("hasNumRef", "0")
+
+                # Process paragraphs inside
+                para_start = i + 1
+                para_end = children_end
+                # Find end of this list header's children
+                for j in range(i + 1, children_end):
+                    if self.models[j].get("level", 0) <= sc_level + 1:
+                        if self.models[j].get("tagname") != "HWPTAG_PARA_HEADER":
+                            para_end = j
+                            break
+                        # If another LIST_HEADER at same level, stop
+                        if self.models[j].get("tagname") == "HWPTAG_LIST_HEADER":
+                            para_end = j
+                            break
+                    # Keep going for paragraph children at deeper levels
+
+                # Find actual end - paragraphs are at same level as list header
+                para_end = children_end
+                for j in range(i + 1, children_end):
+                    mj = self.models[j]
+                    if mj.get("level", 0) <= sc_level and mj.get("tagname") != "HWPTAG_PARA_HEADER":
+                        para_end = j
+                        break
+                    if mj.get("tagname") == "HWPTAG_SHAPE_COMPONENT_RECTANGLE":
+                        para_end = j
+                        break
+
+                old_pos = self.pos
+                self.pos = para_start
+                while self.pos < para_end:
+                    model = self.models[self.pos]
+                    if model.get("tagname") == "HWPTAG_PARA_HEADER":
+                        self._process_paragraph(sl)
+                    else:
+                        self.advance()
+                self.pos = old_pos
+                break
+
+    def _build_container(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+        """Build hp:container element for grouped shapes."""
+        container = sub(parent, "hp", "container")
+        self._gso_common_attrs(container, ctrl_content, "PICTURE")
+
+        # Process child SHAPE_COMPONENTs
+        i = children_start
+        while i < children_end:
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT" and m.get("level", 0) == sc_level + 1:
+                child_sc = m.get("content", {})
+                child_chid = child_sc.get("chid", "").strip()
+
+                # Find end of this child shape
+                child_end = i + 1
+                while child_end < children_end:
+                    if self.models[child_end].get("level", 0) <= sc_level + 1:
+                        break
+                    child_end += 1
+
+                if child_chid == "$pic":
+                    self._build_picture(container, ctrl_content, child_sc, i + 1, child_end, sc_level + 1)
+                elif child_chid == "$rec":
+                    self._build_rectangle(container, ctrl_content, child_sc, i + 1, child_end, sc_level + 1)
+                elif child_chid == "$lin":
+                    self._build_line_shape(container, ctrl_content, child_sc, i + 1, child_end, sc_level + 1)
+                elif child_chid == "$con":
+                    self._build_container(container, ctrl_content, child_sc, i + 1, child_end, sc_level + 1)
+
+                i = child_end
+            else:
+                i += 1
+
+    def _build_line_shape(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+        """Build hp:line element for a line shape."""
+        line = sub(parent, "hp", "line")
+        self._gso_common_attrs(line, ctrl_content, "PICTURE")
+
+        # Find SHAPE_COMPONENT_LINE child
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT_LINE":
+                lc = m.get("content", {})
+                p0 = lc.get("p0", {"x": 0, "y": 0})
+                p1 = lc.get("p1", {"x": 0, "y": 0})
+                sub(line, "hp", "startPt", {"x": str(p0.get("x", 0)), "y": str(p0.get("y", 0))})
+                sub(line, "hp", "endPt", {"x": str(p1.get("x", 0)), "y": str(p1.get("y", 0))})
+                break
+
     # ---------- Helper builders ----------
 
     def _build_page_pr(self, sec_pr, page_def):
         """Build pagePr element."""
         width = page_def.get("width", 59528)
         height = page_def.get("height", 84188)
-        landscape = "WIDELY" if width > height else "NARROWLY"
         attr_val = page_def.get("attr", 0)
+
+        # NOTE:
+        # Some real-world Korean official documents render more correctly in Hancom
+        # when page orientation is treated as landscape-first, even when raw HWP page
+        # dimensions are portrait-shaped. Prefer explicit attr bit if it exists; fall back
+        # to a landscape-first heuristic for document compatibility.
+        orientation_flag = attr_val & 0x01
+        if orientation_flag:
+            landscape = "WIDELY"
+        else:
+            landscape = "WIDELY" if width <= height else "NARROWLY"
+
         gutter_type = (attr_val >> 1) & 0x03
 
         pp = sub(sec_pr, "hp", "pagePr")

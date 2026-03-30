@@ -394,6 +394,15 @@ IMAGE_TYPE_MAP = {
 }
 
 
+# Picture effect type
+PICTURE_EFFECT_MAP = {
+    0: "REAL_PIC",
+    1: "GRAY_SCALE",
+    2: "BLACK_WHITE",
+    3: "PATTERN8x8",
+}
+
+
 def extract_charshape_flags(flags):
     """Extract charshape boolean flags from the flags integer."""
     return {
