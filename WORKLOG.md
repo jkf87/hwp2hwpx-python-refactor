@@ -212,3 +212,10 @@ Target: `★2022년 행정안전부 주요업무 추진계획(최종).hwp`
 - Equations not implemented
 - Advanced GSO shapes (arc, polygon, curve, textart, OLE) stubbed
 - tcps generates no HWPX output (consumed but not converted)
+
+
+## 2026-03-31 — Repository cleanup for Python-only distribution
+- Removed legacy Java/Maven source tree (`src/`) from this repository.
+- Removed `pom.xml`.
+- Verified in a temporary clone that conversion still works without Java sources present.
+- Repository is now packaged as a Python-only distribution target.
