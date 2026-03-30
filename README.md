@@ -2,8 +2,7 @@
 
 `.hwp` 파일을 `.hwpx`로 변환하는 **순수 Python 기반 변환기**입니다.
 
-이 프로젝트는 기존 Java 의존 흐름에서 벗어나,
-**Java 없이 HWP → HWPX 변환**이 가능하도록 리팩토링한 별도 프로젝트입니다.
+순수 Python 구현으로 `.hwp`를 `.hwpx`로 변환합니다.
 
 ## 설치
 
@@ -49,4 +48,4 @@ convert_file("input.hwp", "output.hwpx")
 
 ## 라이선스
 
-Apache-2.0
+라이선스 검토 중

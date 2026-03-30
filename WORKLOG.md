@@ -219,3 +219,9 @@ Target: `★2022년 행정안전부 주요업무 추진계획(최종).hwp`
 - Removed `pom.xml`.
 - Verified in a temporary clone that conversion still works without Java sources present.
 - Repository is now packaged as a Python-only distribution target.
+
+
+## 2026-03-31 — Licensing cleanup checkpoint
+- Repository now distributes Python implementation only (`src/` and `pom.xml` removed).
+- Remaining upstream/license references are now documentation cleanup items, not runtime dependencies.
+- Kept implementation history in WORKLOG for traceability while preparing for a cleaner licensing review.

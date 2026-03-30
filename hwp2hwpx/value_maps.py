@@ -204,7 +204,7 @@ SYM_MARK_MAP = {
     12: "HORN",
 }
 
-# Number format
+# Numbering / format enums
 NUM_FORMAT_MAP = {
     0: "DIGIT",
     1: "CIRCLED_DIGIT",
