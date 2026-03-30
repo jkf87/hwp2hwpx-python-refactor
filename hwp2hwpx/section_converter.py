@@ -706,8 +706,12 @@ class ConversionContext:
         tbl.set("id", str(content.get("instance_id", 0)))
         tbl.set("zOrder", str(content.get("z_order", 0)))
         tbl.set("numberingType", "TABLE")
-        tbl.set("textWrap", "SQUARE")
-        tbl.set("textFlow", "BOTH_SIDES")
+
+        ctrl_flags = content.get("flags", 0)
+        text_wrap_type = (ctrl_flags >> 21) & 0x07
+        text_flow_type = (ctrl_flags >> 24) & 0x03
+        tbl.set("textWrap", vm.TEXT_WRAP_MAP.get(text_wrap_type, "SQUARE"))
+        tbl.set("textFlow", vm.TEXT_FLOW_MAP.get(text_flow_type, "BOTH_SIDES"))
         tbl.set("lock", "0")
         tbl.set("dropcapstyle", "None")
 
@@ -739,7 +743,6 @@ class ConversionContext:
         # bits 10-12: vertAlign, bits 14-16: horzAlign
         # bit 17: flowWithText, bit 18: allowOverlap
         pos = sub(tbl, "hp", "pos")
-        ctrl_flags = content.get("flags", 0)
         pos.set("treatAsChar", str((ctrl_flags >> 0) & 0x01))
         pos.set("affectLSpacing", str((ctrl_flags >> 2) & 0x01))
         pos.set("flowWithText", str((ctrl_flags >> 17) & 0x01))
