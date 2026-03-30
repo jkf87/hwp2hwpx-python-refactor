@@ -168,3 +168,25 @@ Previously silently consumed. Now generates correct HWPX elements:
 - 2 extra pics from WMF bindata (276-byte decorative metafiles)
 - 4 extra lineShape elements on shapes
 - 4 extra tab elements
+
+### PDF Visual Equivalence Sprint (2026-03-30)
+
+Target: `★2022년 행정안전부 주요업무 추진계획(최종).hwp`
+
+**Fixes applied (highest impact first):**
+
+| Fix | Commit | Impact |
+|-----|--------|--------|
+| borderFill colors: read from `fill_colorpattern` dict | `afc7659` | Table/cell background colors were all wrong (reading from nonexistent keys) |
+| Text splitting at char shape boundaries | `5198b77` | Multi-style paragraphs rendered in single style; 2592 runs vs 846 before |
+| Paragraph margin doubling fix (case=val/2, default=val) | `a17d3cb` | All paragraph indents and spacing 2-4x too large |
+| Table textWrap/textFlow from CommonControl flags | `86906b8` | Tables had wrong wrap mode (SQUARE instead of TIGHT) |
+| Table cell vertAlign/textDirection from listflags | `74e10c1` | Cell text was vertically centered instead of top-aligned |
+| Gradation fill support (fillflags & 0x04) | `afc7659` | Gradient backgrounds in table headers now rendered |
+
+**Current state** (target file):
+- 569 paragraphs, 2592 runs, 62 tables, 15 GSO shapes
+- All borderFill IDs valid (1-77), all charPr IDs valid (0-503)
+- Correct fill colors: #DFE6F7 (light blue headers), #3E57A5 (dark blue), #FFFFE5 (yellow), etc.
+- Correct border types: SOLID, DOUBLE_SLIM, DOT mapped correctly
+- 33/33 test suite files pass
