@@ -22,6 +22,15 @@ def color_from_int_with_alpha(val):
     return f"#{r:02X}{g:02X}{b:02X}", str(a)
 
 
+# Gradation type
+GRADATION_TYPE_MAP = {
+    1: "LINEAR",
+    2: "RADIAL",
+    3: "CONICAL",
+    4: "SQUARE",
+}
+
+
 # Line/border stroke type (stroke_flags lower 4 bits)
 STROKE_TYPE_MAP = {
     0: "NONE",

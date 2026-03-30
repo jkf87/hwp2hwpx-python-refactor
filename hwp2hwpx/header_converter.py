@@ -154,27 +154,43 @@ def _build_border_fills(ref_list, reader):
 
         # Fill
         fill_flags = bf.get("fillflags", 0)
-        fill_brush = bf.get("fill", {})
-        if fill_flags or fill_brush:
+        if fill_flags:
             _build_fill_brush(bf_elem, bf)
 
 
 def _build_fill_brush(parent, bf):
     """Build fillBrush element for a borderFill."""
     fb = sub(parent, "hc", "fillBrush")
-    fill = bf.get("fill", {})
+    fill_flags = bf.get("fillflags", 0)
 
-    # Window brush (solid color fill)
-    face_color = fill.get("face_color", None)
-    hatch_color = fill.get("hatch_color", None)
-
-    if face_color is not None or hatch_color is not None:
+    # Solid color fill (bit 0)
+    if fill_flags & 0x01:
+        cp = bf.get("fill_colorpattern", {})
+        bg_color = cp.get("background_color", -1)
+        pat_color = cp.get("pattern_color", -1)
         wb = sub(fb, "hc", "winBrush")
-        fc = vm.color_from_int(face_color) if face_color is not None else "none"
-        hc_val = vm.color_from_int(hatch_color) if hatch_color is not None else "#FF000000"
-        wb.set("faceColor", fc)
-        wb.set("hatchColor", hc_val)
+        wb.set("faceColor", vm.color_from_int(bg_color))
+        wb.set("hatchColor", vm.color_from_int(pat_color))
         wb.set("alpha", "0")
+
+    # Gradation fill (bit 2)
+    if fill_flags & 0x04:
+        grad = bf.get("fill_gradation", {})
+        if grad:
+            ge = sub(fb, "hc", "gradation")
+            grad_type = grad.get("type", 1)
+            ge.set("type", vm.GRADATION_TYPE_MAP.get(grad_type, "LINEAR"))
+            ge.set("angle", str(grad.get("shear", 0)))
+            center = grad.get("center", {})
+            ge.set("centerX", str(center.get("x", 50)))
+            ge.set("centerY", str(center.get("y", 50)))
+            ge.set("step", str(grad.get("blur", 50)))
+            ge.set("colorNum", str(len(grad.get("colors", []))))
+            # Color stops
+            colors = grad.get("colors", [])
+            for ci, c in enumerate(colors):
+                cs_elem = sub(ge, "hc", "color")
+                cs_elem.set("value", vm.color_from_int(c))
 
 
 def _build_char_properties(ref_list, reader):
