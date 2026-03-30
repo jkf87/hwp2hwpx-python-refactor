@@ -135,10 +135,11 @@ class HWPReader:
         if self.ole.exists("FileHeader"):
             data = self.ole.openstream("FileHeader").read()
             if len(data) >= 36:
-                result["major"] = data[32]
-                result["minor"] = data[33]
-                result["micro"] = data[34]
-                result["build"] = data[35]
+                # Version DWORD at offset 32 is little-endian: [build_lo, build_hi, minor, major]
+                result["major"] = data[35]
+                result["minor"] = data[34]
+                result["micro"] = data[33]
+                result["build"] = data[32]
         return result
 
     # --- Preview ---
