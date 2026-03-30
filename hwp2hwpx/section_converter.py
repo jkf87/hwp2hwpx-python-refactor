@@ -336,6 +336,11 @@ class ConversionContext:
                         ctrl_idx += 1
                         ctrl_model = self.models[start]
                         self._build_autonomous_ctrl_inline(current_run, chid.strip(), ctrl_model)
+                elif code == 23:
+                    # Table cell paragraph shape (tcps) - consume ctrl
+                    flush_text()
+                    if ctrl_idx < len(ctrl_positions):
+                        ctrl_idx += 1
                 elif code == 3 or code == 4:
                     pass  # Field begin/end
 
