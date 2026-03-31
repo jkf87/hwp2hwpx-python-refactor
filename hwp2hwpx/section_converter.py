@@ -81,12 +81,12 @@ def _transform_point(x, y, sc_content):
     return int(round(fx)), int(round(fy))
 
 
-def build_section_xml(reader, section_idx):
+def build_section_xml(reader, section_idx, bindata_id_map=None):
     """Build section XML element from HWP section models."""
     models = reader.get_section_models(section_idx)
     sec = root_element("hs", "sec")
 
-    ctx = ConversionContext(reader, models)
+    ctx = ConversionContext(reader, models, bindata_id_map)
     ctx.process_section(sec)
     return sec
 
@@ -94,10 +94,13 @@ def build_section_xml(reader, section_idx):
 class ConversionContext:
     """Manages state during section model conversion."""
 
-    def __init__(self, reader, models):
+    def __init__(self, reader, models, bindata_id_map=None):
         self.reader = reader
         self.models = models
         self.pos = 0
+        # Maps 1-based BIN_DATA list index → "imageN" label for entries
+        # with actual binary data.  Used to emit valid binaryItemIDRef.
+        self._bindata_id_map = bindata_id_map or {}
 
     def advance(self):
         self.pos += 1
@@ -1370,9 +1373,17 @@ class ConversionContext:
                 picture = pic_content.get("picture", {})
                 bindata_id = picture.get("bindata_id", 0)
 
+                # Resolve to a label that exists in the manifest/ZIP.
+                # bindata_id is a 1-based index into the BIN_DATA list.
+                image_label = self._bindata_id_map.get(bindata_id)
+                if not image_label:
+                    # No actual binary data for this reference — drop the picture
+                    parent.remove(pic)
+                    return
+
                 # hc:img with imgRect and imgClip as children (matches Hancom reference)
                 img = sub(pic, "hc", "img")
-                img.set("binaryItemIDRef", f"image{bindata_id}")
+                img.set("binaryItemIDRef", image_label)
                 img.set("bright", str(picture.get("brightness", 0)))
                 img.set("contrast", str(picture.get("contrast", 0)))
                 effect = picture.get("effect", 0)
