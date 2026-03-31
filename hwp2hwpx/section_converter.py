@@ -1,5 +1,6 @@
 """Convert HWP BodyText sections to HWPX section XML files."""
 
+import struct
 from .xml_builder import root_element, sub, make_tag
 from . import value_maps as vm
 
@@ -290,6 +291,8 @@ class ConversionContext:
                             self._build_table_inline(current_run, ctrl_model, start + 1, end)
                         elif chid.strip() == "gso":
                             self._build_gso_inline(current_run, ctrl_model, start + 1, end)
+                        elif chid.strip() == "eqed":
+                            self._build_equation_inline(current_run, ctrl_model, start + 1, end)
                 elif code == 16:
                     # Header/Footer control
                     flush_text()
@@ -341,8 +344,18 @@ class ConversionContext:
                     flush_text()
                     if ctrl_idx < len(ctrl_positions):
                         ctrl_idx += 1
-                elif code == 3 or code == 4:
-                    pass  # Field begin/end
+                elif code == 3:
+                    # Field begin - has a CTRL_HEADER
+                    flush_text()
+                    if ctrl_idx < len(ctrl_positions):
+                        chid, start, end = ctrl_positions[ctrl_idx]
+                        ctrl_idx += 1
+                        ctrl_model = self.models[start]
+                        self._build_field_begin_inline(current_run, ctrl_model)
+                elif code == 4:
+                    # Field end - NO CTRL_HEADER, info is in chunk param bytes
+                    flush_text()
+                    self._build_field_end_inline(current_run, value)
 
         flush_text()
 
@@ -694,16 +707,273 @@ class ConversionContext:
             ph.set("hidePageNum", str((flags >> 5) & 0x01))
 
         elif chid == "nwno":
-            # New numbering
+            # New numbering - flags bits 0-3 encode numType
+            flags = content.get("flags", 0)
+            num_type_val = flags & 0x0F
+            nwno_type_map = {0: "PAGE", 1: "FOOTNOTE", 2: "ENDNOTE",
+                             3: "PICTURE", 4: "TABLE", 5: "EQUATION"}
             ctrl = sub(run, "hp", "ctrl")
             nn = sub(ctrl, "hp", "newNum")
             nn.set("num", str(content.get("number", 1)))
-            nn.set("numType", "PAGE")
+            nn.set("numType", nwno_type_map.get(num_type_val, "PAGE"))
 
         elif chid == "tcps":
             # Table cell paragraph shape - currently minimal support
             pass
         # else: unknown autonomous control, skip
+
+    # ---------- Field control builders ----------
+
+    # Field type mapping: chid prefix → HWPX type name
+    _FIELD_TYPE_MAP = {
+        "%clk": "CLICK_HERE",
+        "%hyp": "HYPERLINK",
+        "%bok": "BOOKMARK",
+        "%formula": "FORMULA",
+        "%summry": "SUMMARY",
+        "%usr": "USERINFO",
+        "%hlnk": "HYPERLINK",
+        "%date": "DATE",
+        "%dtfm": "DATE",
+        "%path": "FILEPATH",
+        "%bmk": "BOOKMARK",
+        "%mmrg": "MAIL_MERGE",
+        "%xref": "CROSSREF",
+        "%unkn": "UNKNOWN",
+    }
+
+    def _build_field_begin_inline(self, run, ctrl_model):
+        """Build fieldBegin element inside a run.
+
+        HWP: CTRL_HEADER with chid='%clk'|'%hyp'|'%bok'|etc., flags, extra_attr, command, id
+        HWPX: <hp:ctrl><hp:fieldBegin id=.. type=.. name=.. editable=.. dirty=.. zorder=.. fieldid=..>
+                 <hp:parameters ...>
+               </hp:fieldBegin></hp:ctrl>
+        """
+        content = ctrl_model.get("content", {})
+        chid = content.get("chid", "").strip()
+        field_type = self._FIELD_TYPE_MAP.get(chid, "UNKNOWN")
+
+        field_id = content.get("id", 0)
+
+        # Track field begins for LIFO matching with field ends
+        if not hasattr(self, "_field_begin_stack"):
+            self._field_begin_stack = []
+        self._field_begin_stack.append(field_id)
+
+        ctrl = sub(run, "hp", "ctrl")
+        fb = sub(ctrl, "hp", "fieldBegin")
+        fb.set("id", str(field_id))
+        fb.set("type", field_type)
+        fb.set("name", "")
+        flags = content.get("flags", 0)
+        fb.set("editable", str((flags >> 0) & 0x01))
+        fb.set("dirty", str((flags >> 15) & 0x01))
+        fb.set("zorder", "-1")
+        # fieldid = chid bytes as big-endian int
+        fieldid = int.from_bytes(chid[:4].encode("ascii", errors="replace"), "big") if len(chid) >= 4 else 0
+        fb.set("fieldid", str(fieldid))
+
+        # Build parameters from extra_attr and command
+        command = content.get("command", "")
+        extra_attr = content.get("extra_attr", 0)
+        if command or extra_attr:
+            params = sub(fb, "hp", "parameters")
+            param_count = 0
+            if extra_attr:
+                ip = sub(params, "hp", "integerParam")
+                ip.set("name", "Prop")
+                ip.text = str(extra_attr)
+                param_count += 1
+            if command:
+                sp = sub(params, "hp", "stringParam")
+                sp.set("name", "Command")
+                sp.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                sp.text = command
+                param_count += 1
+            params.set("cnt", str(param_count))
+            params.set("name", "")
+
+    def _build_field_end_inline(self, run, chunk_value):
+        """Build fieldEnd element inside a run.
+
+        Field ends have no CTRL_HEADER. They match field begins in LIFO order
+        (fields nest like parentheses). We pop the most recent open field ID.
+        HWPX: <hp:ctrl><hp:fieldEnd beginIDRef=.. fieldid=../></hp:ctrl>
+        """
+        begin_id = 0
+        if hasattr(self, "_field_begin_stack") and self._field_begin_stack:
+            begin_id = self._field_begin_stack.pop()
+
+        # fieldid = chid bytes (without leading \t) → same field type id as begin
+        chid = chunk_value.get("chid", "") if isinstance(chunk_value, dict) else ""
+        # Field end chid starts with \t, replace with % to match begin's chid
+        chid_clean = "%" + chid[1:] if chid.startswith("\t") else chid
+        fieldid = int.from_bytes(chid_clean[:4].encode("ascii", errors="replace"), "big") if len(chid_clean) >= 4 else 0
+
+        ctrl = sub(run, "hp", "ctrl")
+        fe = sub(ctrl, "hp", "fieldEnd")
+        fe.set("beginIDRef", str(begin_id))
+        fe.set("fieldid", str(fieldid))
+
+    # ---------- Equation builder ----------
+
+    def _build_equation_inline(self, run, ctrl_model, children_start, children_end):
+        """Build hp:equation element for an equation control.
+
+        HWP: CTRL_HEADER(eqed) → CTRL_EQEDIT
+        pyhwp doesn't parse eqed CommonControl fields or CTRL_EQEDIT content,
+        so we parse the raw unparsed bytes.
+        HWPX: <hp:equation version=.. baseLine=.. textColor=.. baseUnit=.. lineMode=.. font=..>
+                 <hp:sz .../><hp:pos .../><hp:outMargin .../>
+                 <hp:shapeComment>text</hp:shapeComment>
+                 <hp:script>formula</hp:script>
+               </hp:equation>
+        """
+        content = ctrl_model.get("content", {})
+        unparsed = ctrl_model.get("unparsed", b"")
+
+        # Parse CommonControl fields from unparsed bytes
+        eq_props = self._parse_eqed_ctrl(unparsed)
+
+        # Parse CTRL_EQEDIT payload for equation content
+        eq_content = {}
+        for i in range(children_start, children_end):
+            m = self.models[i]
+            if m.get("tagname") == "HWPTAG_CTRL_EQEDIT":
+                eq_content = self._parse_eqedit(m.get("unparsed", m.get("payload", b"")))
+                break
+
+        eq = sub(run, "hp", "equation")
+        eq.set("id", str(eq_props.get("instance_id", 0)))
+        eq.set("zOrder", str(eq_props.get("z_order", 0)))
+        eq.set("numberingType", "EQUATION")
+
+        ctrl_flags = eq_props.get("flags", 0)
+        text_wrap_type = (ctrl_flags >> 21) & 0x07
+        text_flow = (ctrl_flags >> 24) & 0x03
+        eq.set("textWrap", vm.TEXT_WRAP_MAP.get(text_wrap_type, "TOP_AND_BOTTOM"))
+        eq.set("textFlow", vm.TEXT_FLOW_MAP.get(text_flow, "BOTH_SIDES"))
+        eq.set("lock", "0")
+        eq.set("dropcapstyle", "None")
+
+        eq.set("version", eq_content.get("version", ""))
+        eq.set("baseLine", str(eq_content.get("baseline", 0)))
+        eq.set("textColor", vm.color_from_int(eq_content.get("text_color", 0)))
+        eq.set("baseUnit", str(eq_content.get("base_unit", 1000)))
+        line_mode = eq_content.get("line_mode", 1)
+        eq.set("lineMode", "LINE" if line_mode else "CHAR")
+        eq.set("font", eq_content.get("font", "HancomEQN"))
+
+        # hp:sz
+        sz = sub(eq, "hp", "sz")
+        sz.set("width", str(eq_props.get("width", 0)))
+        sz.set("widthRelTo", "COLUMN")
+        sz.set("height", str(eq_props.get("height", 0)))
+        sz.set("heightRelTo", "ABSOLUTE")
+        sz.set("protect", "0")
+
+        # hp:pos
+        pos = sub(eq, "hp", "pos")
+        pos.set("treatAsChar", str((ctrl_flags >> 0) & 0x01))
+        pos.set("affectLSpacing", str((ctrl_flags >> 2) & 0x01))
+        pos.set("flowWithText", str((ctrl_flags >> 17) & 0x01))
+        pos.set("allowOverlap", str((ctrl_flags >> 18) & 0x01))
+        pos.set("holdAnchorAndSO", "0")
+        vert_rel = (ctrl_flags >> 3) & 0x03
+        horz_rel = (ctrl_flags >> 8) & 0x03
+        vert_align = (ctrl_flags >> 10) & 0x07
+        horz_align = (ctrl_flags >> 14) & 0x07
+        pos.set("vertRelTo", vm.VERT_REL_TO_MAP.get(vert_rel, "PARA"))
+        pos.set("horzRelTo", vm.HORZ_REL_TO_MAP.get(horz_rel, "PARA"))
+        pos.set("vertAlign", vm.VERT_ALIGN_MAP.get(vert_align, "TOP"))
+        pos.set("horzAlign", vm.HORZ_ALIGN_MAP.get(horz_align, "LEFT"))
+        pos.set("vertOffset", str(eq_props.get("y", 0)))
+        pos.set("horzOffset", str(eq_props.get("x", 0)))
+
+        # hp:outMargin
+        om = sub(eq, "hp", "outMargin")
+        om.set("left", str(eq_props.get("margin_left", 0)))
+        om.set("right", str(eq_props.get("margin_right", 0)))
+        om.set("top", str(eq_props.get("margin_top", 0)))
+        om.set("bottom", str(eq_props.get("margin_bottom", 0)))
+
+        # hp:shapeComment
+        desc = eq_props.get("description", "")
+        sc = sub(eq, "hp", "shapeComment")
+        if desc:
+            sc.text = desc
+
+        # hp:script (equation formula)
+        script = eq_content.get("script", "")
+        if script:
+            scr = sub(eq, "hp", "script")
+            scr.text = script
+
+    @staticmethod
+    def _parse_eqed_ctrl(unparsed):
+        """Parse CommonControl fields for eqed from unparsed bytes."""
+        result = {}
+        if not unparsed or len(unparsed) < 36:
+            return result
+        off = 0
+        result["flags"] = struct.unpack_from("<I", unparsed, off)[0]; off += 4
+        result["y"] = struct.unpack_from("<i", unparsed, off)[0]; off += 4
+        result["x"] = struct.unpack_from("<i", unparsed, off)[0]; off += 4
+        result["width"] = struct.unpack_from("<I", unparsed, off)[0]; off += 4
+        result["height"] = struct.unpack_from("<I", unparsed, off)[0]; off += 4
+        result["z_order"] = struct.unpack_from("<i", unparsed, off)[0]; off += 4
+        result["margin_left"] = struct.unpack_from("<H", unparsed, off)[0]; off += 2
+        result["margin_right"] = struct.unpack_from("<H", unparsed, off)[0]; off += 2
+        result["margin_top"] = struct.unpack_from("<H", unparsed, off)[0]; off += 2
+        result["margin_bottom"] = struct.unpack_from("<H", unparsed, off)[0]; off += 2
+        result["instance_id"] = struct.unpack_from("<I", unparsed, off)[0]; off += 4
+        if off + 4 <= len(unparsed):
+            result["pagenum"] = struct.unpack_from("<i", unparsed, off)[0]; off += 4
+        if off + 2 <= len(unparsed):
+            desc_len = struct.unpack_from("<H", unparsed, off)[0]; off += 2
+            if off + desc_len * 2 <= len(unparsed):
+                result["description"] = unparsed[off:off + desc_len * 2].decode("utf-16-le", errors="replace")
+                off += desc_len * 2
+        return result
+
+    @staticmethod
+    def _parse_eqedit(payload):
+        """Parse CTRL_EQEDIT payload for equation script, version, font, etc."""
+        result = {}
+        if not payload or len(payload) < 6:
+            return result
+        off = 0
+        prop = struct.unpack_from("<I", payload, off)[0]; off += 4
+        result["line_mode"] = prop & 1
+
+        script_len = struct.unpack_from("<H", payload, off)[0]; off += 2
+        if off + script_len * 2 <= len(payload):
+            result["script"] = payload[off:off + script_len * 2].decode("utf-16-le", errors="replace")
+            off += script_len * 2
+
+        # base_unit (DWORD), text_color (DWORD), baseline (WORD), unknown (WORD)
+        if off + 12 <= len(payload):
+            result["base_unit"] = struct.unpack_from("<I", payload, off)[0]; off += 4
+            result["text_color"] = struct.unpack_from("<I", payload, off)[0]; off += 4
+            result["baseline"] = struct.unpack_from("<H", payload, off)[0]; off += 2
+            off += 2  # skip unknown WORD
+
+        # version string (WORD len + WCHAR[])
+        if off + 2 <= len(payload):
+            ver_len = struct.unpack_from("<H", payload, off)[0]; off += 2
+            if ver_len > 0 and off + ver_len * 2 <= len(payload):
+                result["version"] = payload[off:off + ver_len * 2].decode("utf-16-le", errors="replace")
+                off += ver_len * 2
+
+        # font string (WORD len + WCHAR[]) - may not be present
+        if off + 2 <= len(payload):
+            font_len = struct.unpack_from("<H", payload, off)[0]; off += 2
+            if font_len > 0 and off + font_len * 2 <= len(payload):
+                result["font"] = payload[off:off + font_len * 2].decode("utf-16-le", errors="replace")
+                off += font_len * 2
+
+        return result
 
     def _build_table_inline(self, run, ctrl_model, children_start, children_end):
         """Build table element inside a run element."""
@@ -920,7 +1190,7 @@ class ConversionContext:
                     self._build_line_shape(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
                 elif chid == "$ell":
                     self._build_ellipse(run, content, sc_content, i + 1, children_end, ctrl_level + 1)
-                # else: unknown shape type, skip
+                # $arc, $pol, $cur, $tat (textart), $ole: not yet implemented
                 break
 
     def _gso_common_attrs(self, elem, ctrl_content, numbering_type="PICTURE", sc_content=None):
@@ -993,14 +1263,38 @@ class ConversionContext:
 
         # fillBrush from SHAPE_COMPONENT fill data
         fill_flags = src.get("fill_flags", 0)
-        if fill_flags & 0x01:  # has solid fill
-            face_color = src.get("fill_face_color", src.get("fill_color", None))
-            if face_color is not None:
-                fb = sub(elem, "hc", "fillBrush")
-                wb = sub(fb, "hc", "winBrush")
-                wb.set("faceColor", vm.color_from_int(face_color))
-                wb.set("hatchColor", "#FF000000")
-                wb.set("alpha", "0")
+        if fill_flags:
+            fb = None
+            # Solid fill (bit 0)
+            if fill_flags & 0x01:
+                face_color = src.get("fill_face_color", src.get("fill_color", None))
+                if face_color is not None:
+                    if fb is None:
+                        fb = sub(elem, "hc", "fillBrush")
+                    wb = sub(fb, "hc", "winBrush")
+                    wb.set("faceColor", vm.color_from_int(face_color))
+                    hatch_color = src.get("fill_hatch_color", None)
+                    wb.set("hatchColor", vm.color_from_int(hatch_color) if hatch_color is not None else "#FF000000")
+                    wb.set("alpha", "0")
+            # Gradation fill (bit 2)
+            if fill_flags & 0x04:
+                grad = src.get("fill_gradation", {})
+                if grad:
+                    if fb is None:
+                        fb = sub(elem, "hc", "fillBrush")
+                    ge = sub(fb, "hc", "gradation")
+                    grad_type = grad.get("type", 1)
+                    ge.set("type", vm.GRADATION_TYPE_MAP.get(grad_type, "LINEAR"))
+                    ge.set("angle", str(grad.get("shear", 0)))
+                    center = grad.get("center", {})
+                    ge.set("centerX", str(center.get("x", 50)))
+                    ge.set("centerY", str(center.get("y", 50)))
+                    ge.set("step", str(grad.get("blur", 50)))
+                    colors = grad.get("colors", [])
+                    ge.set("colorNum", str(len(colors)))
+                    for c in colors:
+                        cs_elem = sub(ge, "hc", "color")
+                        cs_elem.set("value", vm.color_from_int(c))
 
     def _gso_common_attrs_tail(self, elem, ctrl_content, sc_content=None):
         """Emit sz, pos, outMargin as trailing children (for pic elements where these come last)."""
