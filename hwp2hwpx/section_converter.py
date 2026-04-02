@@ -1197,7 +1197,12 @@ class ConversionContext:
                 break
 
     def _gso_common_attrs(self, elem, ctrl_content, numbering_type="PICTURE", sc_content=None):
-        """Set common GSO attributes (sz, pos, outMargin, lineShape, fillBrush) on an element."""
+        """Set common GSO attributes on an element.
+
+        Hancom HWPX reference order for all GSO elements:
+        attrs → hp:offset, hp:orgSz, hp:curSz, hp:flip, hp:rotationInfo,
+        hp:renderingInfo, [element-specific], hp:sz, hp:pos, hp:outMargin
+        """
         elem.set("id", str(ctrl_content.get("instance_id", 0)))
         elem.set("zOrder", str(ctrl_content.get("z_order", 0)))
         elem.set("numberingType", numbering_type)
@@ -1208,42 +1213,86 @@ class ConversionContext:
         elem.set("textWrap", vm.TEXT_WRAP_MAP.get(text_wrap_type, "TOP_AND_BOTTOM"))
         elem.set("textFlow", vm.TEXT_FLOW_MAP.get(text_flow, "BOTH_SIDES"))
         elem.set("lock", "0")
+        elem.set("dropcapstyle", "None")
+        elem.set("href", "")
+        src = sc_content if sc_content else {}
+        elem.set("groupLevel", str(src.get("level_in_group", 0)))
+        elem.set("instid", str(ctrl_content.get("instance_id", 0)))
 
-        # sz
-        sz = sub(elem, "hp", "sz")
-        sz.set("width", str(ctrl_content.get("width", 0)))
-        sz.set("widthRelTo", "ABSOLUTE")
-        sz.set("height", str(ctrl_content.get("height", 0)))
-        sz.set("heightRelTo", "ABSOLUTE")
-        sz.set("protect", "0")
+        # hp:offset
+        offset = sub(elem, "hp", "offset")
+        x_in_group = src.get("x_in_group", 0)
+        y_in_group = src.get("y_in_group", 0)
+        if x_in_group < 0:
+            x_in_group = x_in_group + 4294967296
+        if y_in_group < 0:
+            y_in_group = y_in_group + 4294967296
+        offset.set("x", str(x_in_group))
+        offset.set("y", str(y_in_group))
 
-        # pos
-        pos = sub(elem, "hp", "pos")
-        pos.set("treatAsChar", str((ctrl_flags >> 0) & 0x01))
-        pos.set("affectLSpacing", str((ctrl_flags >> 2) & 0x01))
-        pos.set("flowWithText", str((ctrl_flags >> 17) & 0x01))
-        pos.set("allowOverlap", str((ctrl_flags >> 18) & 0x01))
-        pos.set("holdAnchorAndSO", "0")
+        # hp:orgSz
+        org_sz = sub(elem, "hp", "orgSz")
+        org_sz.set("width", str(src.get("initial_width", 0)))
+        org_sz.set("height", str(src.get("initial_height", 0)))
 
-        vert_rel = (ctrl_flags >> 3) & 0x03
-        horz_rel = (ctrl_flags >> 8) & 0x03
-        vert_align = (ctrl_flags >> 10) & 0x07
-        horz_align = (ctrl_flags >> 14) & 0x07
+        # hp:curSz
+        cur_sz = sub(elem, "hp", "curSz")
+        cur_sz.set("width", str(src.get("width", 0)))
+        cur_sz.set("height", str(src.get("height", 0)))
 
-        pos.set("vertRelTo", vm.VERT_REL_TO_MAP.get(vert_rel, "PARA"))
-        pos.set("horzRelTo", vm.HORZ_REL_TO_MAP.get(horz_rel, "COLUMN"))
-        pos.set("vertAlign", vm.VERT_ALIGN_MAP.get(vert_align, "TOP"))
-        pos.set("horzAlign", vm.HORZ_ALIGN_MAP.get(horz_align, "LEFT"))
-        pos.set("vertOffset", str(ctrl_content.get("y", 0)))
-        pos.set("horzOffset", str(ctrl_content.get("x", 0)))
+        # hp:flip
+        flip = sub(elem, "hp", "flip")
+        flip.set("horizontal", "0")
+        flip.set("vertical", "0")
 
-        # outMargin
-        margin = ctrl_content.get("margin", {})
-        om = sub(elem, "hp", "outMargin")
-        om.set("left", str(margin.get("left", 0)))
-        om.set("right", str(margin.get("right", 0)))
-        om.set("top", str(margin.get("top", 0)))
-        om.set("bottom", str(margin.get("bottom", 0)))
+        # hp:rotationInfo
+        rot_info = sub(elem, "hp", "rotationInfo")
+        rot_info.set("angle", str(src.get("angle", 0)))
+        rot_center = src.get("rotation_center", {})
+        rot_info.set("centerX", str(rot_center.get("x", 0)))
+        rot_info.set("centerY", str(rot_center.get("y", 0)))
+        rot_info.set("rotateimage", "1")
+
+        # hp:renderingInfo
+        rendering = sub(elem, "hp", "renderingInfo")
+        trans = src.get("translation", {})
+        trans_m = sub(rendering, "hc", "transMatrix")
+        trans_m.set("e1", str(trans.get("a", 1.0)))
+        trans_m.set("e2", str(trans.get("c", 0.0)))
+        trans_m.set("e3", str(trans.get("e", 0.0)))
+        trans_m.set("e4", str(trans.get("b", 0.0)))
+        trans_m.set("e5", str(trans.get("d", 1.0)))
+        trans_m.set("e6", str(trans.get("f", 0.0)))
+
+        scalerotations = src.get("scalerotations", [])
+        if scalerotations:
+            for sr in scalerotations:
+                scaler = sr.get("scaler", {})
+                sca_m = sub(rendering, "hc", "scaMatrix")
+                sca_m.set("e1", str(scaler.get("a", 1.0)))
+                sca_m.set("e2", str(scaler.get("c", 0.0)))
+                sca_m.set("e3", str(scaler.get("e", 0.0)))
+                sca_m.set("e4", str(scaler.get("b", 0.0)))
+                sca_m.set("e5", str(scaler.get("d", 1.0)))
+                sca_m.set("e6", str(scaler.get("f", 0.0)))
+
+                rotator = sr.get("rotator", {})
+                rot_m = sub(rendering, "hc", "rotMatrix")
+                rot_m.set("e1", str(rotator.get("a", 1.0)))
+                rot_m.set("e2", str(rotator.get("c", 0.0)))
+                rot_m.set("e3", str(rotator.get("e", 0.0)))
+                rot_m.set("e4", str(rotator.get("b", 0.0)))
+                rot_m.set("e5", str(rotator.get("d", 1.0)))
+                rot_m.set("e6", str(rotator.get("f", 0.0)))
+        else:
+            for mname in ["scaMatrix", "rotMatrix"]:
+                mat = sub(rendering, "hc", mname)
+                mat.set("e1", "1")
+                mat.set("e2", "0")
+                mat.set("e3", "0")
+                mat.set("e4", "0")
+                mat.set("e5", "1")
+                mat.set("e6", "0")
 
         # lineShape from SHAPE_COMPONENT's line/border properties
         src = sc_content if sc_content else {}
@@ -1256,13 +1305,18 @@ class ConversionContext:
             line_stroke = line_flags & 0x1F
             ls.set("color", vm.color_from_int(line_color))
             ls.set("width", str(line_width))
-            ls.set("type", vm.STROKE_TYPE_MAP.get(line_stroke, "SOLID"))
-            # endCap and headStyle/tailStyle
+            ls.set("style", vm.STROKE_TYPE_MAP.get(line_stroke, "SOLID"))
             ls.set("endCap", "FLAT")
             head_style = (line_flags >> 10) & 0x0F
             tail_style = (line_flags >> 14) & 0x0F
             ls.set("headStyle", _arrow_style(head_style))
             ls.set("tailStyle", _arrow_style(tail_style))
+            ls.set("headfill", "0")
+            ls.set("tailfill", "0")
+            ls.set("headSz", "MEDIUM_MEDIUM")
+            ls.set("tailSz", "MEDIUM_MEDIUM")
+            ls.set("outlineStyle", "NORMAL")
+            ls.set("alpha", "0")
 
         # fillBrush from SHAPE_COMPONENT fill data
         fill_flags = src.get("fill_flags", 0)
@@ -1339,33 +1393,22 @@ class ConversionContext:
         om.set("top", str(margin.get("top", 0)))
         om.set("bottom", str(margin.get("bottom", 0)))
 
-    def _build_picture(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+    def _build_picture(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level, in_container=False):
         """Build hp:pic element for an image.
 
         Hancom HWPX reference element order:
-        hp:pic attrs → hp:sz, hp:pos, hp:outMargin, hp:shapeComment,
-        hc:img(hc:imgRect, hc:imgClip)
+        hp:pic attrs → hp:offset, hp:orgSz, hp:curSz, hp:flip,
+        hp:rotationInfo, hp:renderingInfo, hp:imgRect, hp:imgClip,
+        hp:inMargin, hp:imgDim, hc:img (leaf), hp:effects,
+        hp:sz, hp:pos, hp:outMargin, hp:shapeComment
         """
         pic = sub(parent, "hp", "pic")
 
-        # Set top-level attributes matching Hancom reference
-        pic.set("id", str(ctrl_content.get("instance_id", 0)))
-        pic.set("zOrder", str(ctrl_content.get("z_order", 0)))
-        pic.set("numberingType", "PICTURE")
-        ctrl_flags = ctrl_content.get("flags", 0)
-        text_wrap_type = (ctrl_flags >> 21) & 0x07
-        text_flow = (ctrl_flags >> 24) & 0x03
-        pic.set("textWrap", vm.TEXT_WRAP_MAP.get(text_wrap_type, "TOP_AND_BOTTOM"))
-        pic.set("textFlow", vm.TEXT_FLOW_MAP.get(text_flow, "BOTH_SIDES"))
-        pic.set("lock", "0")
-
-        # hp:sz, hp:pos, hp:outMargin BEFORE image data (matches Hancom reference)
-        self._gso_common_attrs_tail(pic, ctrl_content, sc_content)
-
-        # hp:shapeComment
-        sub(pic, "hp", "shapeComment")
+        # Common GSO head: attrs + offset, orgSz, curSz, flip, rotationInfo, renderingInfo
+        self._gso_common_attrs(pic, ctrl_content, "PICTURE", sc_content)
 
         # Find SHAPE_COMPONENT_PICTURE child for image-specific data
+        pic_found = False
         for i in range(children_start, children_end):
             m = self.models[i]
             if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT_PICTURE":
@@ -1381,53 +1424,84 @@ class ConversionContext:
                     parent.remove(pic)
                     return
 
-                # hc:img with imgRect and imgClip as children (matches Hancom reference)
+                pic_found = True
+
+                # hp:imgRect as child of hp:pic
+                rect = pic_content.get("rect", {})
+                img_rect = sub(pic, "hp", "imgRect")
+                for pt_name in ["pt0", "pt1", "pt2", "pt3"]:
+                    src_name = pt_name.replace("pt", "p")
+                    pt = rect.get(src_name, {"x": 0, "y": 0})
+                    sub(img_rect, "hc", pt_name, {"x": str(pt.get("x", 0)), "y": str(pt.get("y", 0))})
+
+                # hp:imgClip as child of hp:pic
+                clip = pic_content.get("clip", {})
+                img_clip = sub(pic, "hp", "imgClip")
+                img_clip.set("left", str(clip.get("left", 0)))
+                img_clip.set("right", str(clip.get("right", 0)))
+                img_clip.set("top", str(clip.get("top", 0)))
+                img_clip.set("bottom", str(clip.get("bottom", 0)))
+
+                # hp:inMargin
+                padding = pic_content.get("padding", {})
+                in_margin = sub(pic, "hp", "inMargin")
+                in_margin.set("left", str(padding.get("left", 0)))
+                in_margin.set("right", str(padding.get("right", 0)))
+                in_margin.set("top", str(padding.get("top", 0)))
+                in_margin.set("bottom", str(padding.get("bottom", 0)))
+
+                # hp:imgDim (use clip dimensions as original image dims)
+                img_dim = sub(pic, "hp", "imgDim")
+                img_dim.set("dimwidth", str(clip.get("right", 0)))
+                img_dim.set("dimheight", str(clip.get("bottom", 0)))
+
+                # hc:img as a LEAF element (no children)
                 img = sub(pic, "hc", "img")
                 img.set("binaryItemIDRef", image_label)
                 img.set("bright", str(picture.get("brightness", 0)))
                 img.set("contrast", str(picture.get("contrast", 0)))
                 effect = picture.get("effect", 0)
                 img.set("effect", vm.PICTURE_EFFECT_MAP.get(effect, "REAL_PIC"))
+                img.set("alpha", "0")
 
-                # hc:imgRect inside hc:img
-                rect = pic_content.get("rect", {})
-                img_rect = sub(img, "hc", "imgRect")
-                for pt_name in ["pt0", "pt1", "pt2", "pt3"]:
-                    src_name = pt_name.replace("pt", "p")
-                    pt = rect.get(src_name, {"x": 0, "y": 0})
-                    sub(img_rect, "hc", pt_name, {"x": str(pt.get("x", 0)), "y": str(pt.get("y", 0))})
-
-                # hc:imgClip inside hc:img
-                clip = pic_content.get("clip", {})
-                img_clip = sub(img, "hc", "imgClip")
-                img_clip.set("left", str(clip.get("left", 0)))
-                img_clip.set("right", str(clip.get("right", 0)))
-                img_clip.set("top", str(clip.get("top", 0)))
-                img_clip.set("bottom", str(clip.get("bottom", 0)))
+                # hp:effects (empty placeholder)
+                sub(pic, "hp", "effects")
 
                 break
 
-    def _build_rectangle(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+        if not pic_found:
+            parent.remove(pic)
+            return
+
+        # hp:sz, hp:pos, hp:outMargin AFTER image data (not for container children)
+        if not in_container:
+            self._gso_common_attrs_tail(pic, ctrl_content, sc_content)
+
+        # hp:shapeComment (use description from ctrl_content if available)
+        comment = sub(pic, "hp", "shapeComment")
+        desc = ctrl_content.get("description", "")
+        if desc:
+            comment.text = desc
+
+    def _build_rectangle(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level, in_container=False):
         """Build hp:rect element for a text box / rectangle shape."""
         rect_elem = sub(parent, "hp", "rect")
         self._gso_common_attrs(rect_elem, ctrl_content, "PICTURE", sc_content)
-        rect_elem.set("dropcapstyle", "None")
-
         # Find SHAPE_COMPONENT_RECTANGLE for coordinates
         for i in range(children_start, children_end):
             m = self.models[i]
             if m.get("tagname") == "HWPTAG_SHAPE_COMPONENT_RECTANGLE":
                 rc = m.get("content", {})
-                coord = sub(rect_elem, "hp", "pt0")
+                coord = sub(rect_elem, "hc", "pt0")
                 coord.set("x", str(rc.get("p0", {}).get("x", 0)))
                 coord.set("y", str(rc.get("p0", {}).get("y", 0)))
-                coord = sub(rect_elem, "hp", "pt1")
+                coord = sub(rect_elem, "hc", "pt1")
                 coord.set("x", str(rc.get("p1", {}).get("x", 0)))
                 coord.set("y", str(rc.get("p1", {}).get("y", 0)))
-                coord = sub(rect_elem, "hp", "pt2")
+                coord = sub(rect_elem, "hc", "pt2")
                 coord.set("x", str(rc.get("p2", {}).get("x", 0)))
                 coord.set("y", str(rc.get("p2", {}).get("y", 0)))
-                coord = sub(rect_elem, "hp", "pt3")
+                coord = sub(rect_elem, "hc", "pt3")
                 coord.set("x", str(rc.get("p3", {}).get("x", 0)))
                 coord.set("y", str(rc.get("p3", {}).get("y", 0)))
                 break
@@ -1486,6 +1560,9 @@ class ConversionContext:
                 self.pos = old_pos
                 break
 
+        if not in_container:
+            self._gso_common_attrs_tail(rect_elem, ctrl_content)
+
     def _make_child_ctrl_content(self, parent_ctrl_content, child_sc_content):
         """Create a ctrl_content-like dict for a child shape inside a container,
         using the child's own dimensions from its SHAPE_COMPONENT record."""
@@ -1505,7 +1582,7 @@ class ConversionContext:
         container = sub(parent, "hp", "container")
         self._gso_common_attrs(container, ctrl_content, "PICTURE", sc_content)
 
-        # Process child SHAPE_COMPONENTs
+        # Process child SHAPE_COMPONENTs (before sz/pos/outMargin)
         i = children_start
         while i < children_end:
             m = self.models[i]
@@ -1524,13 +1601,13 @@ class ConversionContext:
                 child_ctrl = self._make_child_ctrl_content(ctrl_content, child_sc)
 
                 if child_chid == "$pic":
-                    self._build_picture(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
+                    self._build_picture(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1, in_container=True)
                 elif child_chid == "$rec":
-                    self._build_rectangle(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
+                    self._build_rectangle(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1, in_container=True)
                 elif child_chid == "$lin":
-                    self._build_line_shape(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
+                    self._build_line_shape(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1, in_container=True)
                 elif child_chid == "$ell":
-                    self._build_ellipse(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
+                    self._build_ellipse(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1, in_container=True)
                 elif child_chid == "$con":
                     self._build_container(container, child_ctrl, child_sc, i + 1, child_end, sc_level + 1)
 
@@ -1538,7 +1615,10 @@ class ConversionContext:
             else:
                 i += 1
 
-    def _build_line_shape(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+        # sz/pos/outMargin AFTER children (matches Hancom reference)
+        self._gso_common_attrs_tail(container, ctrl_content)
+
+    def _build_line_shape(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level, in_container=False):
         """Build hp:line element for a line shape."""
         line = sub(parent, "hp", "line")
         self._gso_common_attrs(line, ctrl_content, "PICTURE", sc_content)
@@ -1553,11 +1633,13 @@ class ConversionContext:
                 # Transform through scalerotation chain for actual coordinates
                 x0, y0 = _transform_point(p0.get("x", 0), p0.get("y", 0), sc_content)
                 x1, y1 = _transform_point(p1.get("x", 0), p1.get("y", 0), sc_content)
-                sub(line, "hp", "startPt", {"x": str(x0), "y": str(y0)})
-                sub(line, "hp", "endPt", {"x": str(x1), "y": str(y1)})
+                sub(line, "hc", "startPt", {"x": str(x0), "y": str(y0)})
+                sub(line, "hc", "endPt", {"x": str(x1), "y": str(y1)})
                 break
+        if not in_container:
+            self._gso_common_attrs_tail(line, ctrl_content)
 
-    def _build_ellipse(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level):
+    def _build_ellipse(self, parent, ctrl_content, sc_content, children_start, children_end, sc_level, in_container=False):
         """Build hp:ellipse element for an ellipse shape."""
         ellipse = sub(parent, "hp", "ellipse")
         self._gso_common_attrs(ellipse, ctrl_content, "PICTURE", sc_content)
@@ -1577,6 +1659,8 @@ class ConversionContext:
                 sub(ellipse, "hp", "ay", {"x": str(cx), "y": str(cy + ry)})
                 sub(ellipse, "hp", "center", {"x": str(cx), "y": str(cy)})
                 break
+        if not in_container:
+            self._gso_common_attrs_tail(ellipse, ctrl_content)
 
     # ---------- Helper builders ----------
 

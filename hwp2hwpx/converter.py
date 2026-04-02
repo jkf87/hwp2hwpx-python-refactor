@@ -257,4 +257,9 @@ def _write_hwpx_zip(files, output_path):
                 continue
             if isinstance(data, str):
                 data = data.encode("utf-8")
-            zf.writestr(path, data)
+            # BinData and Preview images should be stored uncompressed
+            # (matches Hancom reference HWPX behavior)
+            if path.startswith("BinData/") or path.startswith("Preview/"):
+                zf.writestr(path, data, compress_type=zipfile.ZIP_STORED)
+            else:
+                zf.writestr(path, data)
